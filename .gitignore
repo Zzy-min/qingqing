@@ -1,0 +1,55 @@
+# Dependencies
+node_modules/
+frontend/node_modules/
+
+# Build output
+frontend/dist/
+frontend/temp-build/
+backend/static/
+
+# Python
+__pycache__/
+backend/__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+
+# Environment variables
+.env
+backend/.env
+
+# Logs
+*.log
+stderr.log
+stdout.log
+build_log.txt
+
+# Temp PowerShell scripts
+*.ps1
+
+# Backend runtime
+backend/.tmp
+backend/.uvicorn.pid
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# UI screenshots
+frontend/ui-check/
+frontend/verification/
+frontend/ui-desktop-*.png
+frontend/ui-mobile-*.png
+
+# Python venv
+venv/
+.venv/
+env/
+
+# Dev test files
+backend/test_*.py
