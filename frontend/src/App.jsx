@@ -12,6 +12,7 @@ import UsagePage from './pages/UsagePage'
 import HelpPage from './pages/HelpPage'
 import ApiDocsPage from './pages/ApiDocsPage'
 import SettingsPage from './pages/SettingsPage'
+import Chat from './pages/Chat'
 
 function NotFoundRedirect() {
   return <Navigate to="/dashboard" replace />
@@ -33,6 +34,7 @@ export default function App() {
           <Route path="help" element={<HelpPage />} />
           <Route path="api-docs" element={<ApiDocsPage />} />
           <Route path="settings" element={<SettingsPage />} />
+          <Route path="chat" element={<Chat />} />
           <Route path="*" element={<NotFoundRedirect />} />
         </Route>
       </Routes>

@@ -55,6 +55,7 @@ const NAV_GROUPS = [
     title: '创作入口',
     items: [
       { id: 'dashboard', label: '工作台', icon: '🏠', path: '/dashboard' },
+      { id: 'chat', label: 'Chat', icon: '💬', path: '/chat' },
       { id: 'photo', label: '照片编辑', icon: '🖼️', path: '/photo' },
       { id: 'voice', label: '语音合成', icon: '🎙️', path: '/voice' },
       { id: 'music', label: '音乐生成', icon: '🎵', path: '/music' },

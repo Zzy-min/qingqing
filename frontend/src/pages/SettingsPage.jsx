@@ -43,6 +43,18 @@ export default function SettingsPage() {
       defaultParams: {
         ...prev.defaultParams,
         ...(patch.defaultParams || {})
+      },
+      providerApiKeys: {
+        ...(prev.providerApiKeys || {}),
+        ...(patch.providerApiKeys || {})
+      },
+      providerBaseUrls: {
+        ...(prev.providerBaseUrls || {}),
+        ...(patch.providerBaseUrls || {})
+      },
+      providerSecrets: {
+        ...(prev.providerSecrets || {}),
+        ...(patch.providerSecrets || {})
       }
     }))
   }
@@ -117,9 +129,63 @@ export default function SettingsPage() {
               最近校验：{settingsValidation.checkedAt ? settingsValidation.checkedAt.toLocaleString() : '未校验'}
             </div>
             <div className={`settings-status-message ${settingsValidation.ok ? 'settings-status-message-ok' : ''}`}>
-              {settingsValidation.message || '点击“校验当前 Key”执行验证'}
+              {settingsValidation.message || '点击"校验当前 Key"执行验证'}
             </div>
           </div>
+        </div>
+
+        <div className="card-shell settings-card">
+          <h3 className="section-title">多供应商 API Key</h3>
+          <p className="text-xs text-gray-500 mb-3">配置各供应商的 API Key，保存在浏览器本地。未配置的供应商在模型列表中显示为不可用。</p>
+
+          {[
+            { id: 'openai', name: 'OpenAI', placeholder: 'sk-...', hasBaseUrl: true, baseUrlPlaceholder: 'https://api.openai.com/v1' },
+            { id: 'google', name: 'Google Gemini', placeholder: 'AIza...' },
+            { id: 'qwen', name: '通义千问', placeholder: 'sk-...', hasBaseUrl: true, baseUrlPlaceholder: 'https://dashscope.aliyuncs.com/api/v1' },
+            { id: 'ernie', name: '文心一言', placeholder: 'API Key', hasSecret: true, secretPlaceholder: 'Secret Key' },
+            { id: 'zhipu', name: '智谱', placeholder: 'id.secret 格式' },
+            { id: 'minimax', name: 'MiniMax', placeholder: '输入 MiniMax API Key' },
+          ].map((provider) => (
+            <div key={provider.id} className="mb-3 p-3 rounded-lg bg-gray-50 border border-gray-200">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-sm font-medium">{provider.name}</span>
+                {draft.providerApiKeys?.[provider.id] && (
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700">已配置</span>
+                )}
+              </div>
+              <input
+                type="password"
+                value={draft.providerApiKeys?.[provider.id] || ''}
+                onChange={(e) => updateDraft({
+                  providerApiKeys: { ...(draft.providerApiKeys || {}), [provider.id]: e.target.value }
+                })}
+                placeholder={provider.placeholder}
+                className="field-input mb-1"
+              />
+              {provider.hasBaseUrl && (
+                <input
+                  type="text"
+                  value={draft.providerBaseUrls?.[provider.id] || ''}
+                  onChange={(e) => updateDraft({
+                    providerBaseUrls: { ...(draft.providerBaseUrls || {}), [provider.id]: e.target.value }
+                  })}
+                  placeholder={provider.baseUrlPlaceholder}
+                  className="field-input mb-1 text-xs"
+                />
+              )}
+              {provider.hasSecret && (
+                <input
+                  type="password"
+                  value={draft.providerSecrets?.ernie || ''}
+                  onChange={(e) => updateDraft({
+                    providerSecrets: { ...(draft.providerSecrets || {}), ernie: e.target.value }
+                  })}
+                  placeholder={provider.secretPlaceholder}
+                  className="field-input"
+                />
+              )}
+            </div>
+          ))}
         </div>
 
         <div className="card-shell settings-card">

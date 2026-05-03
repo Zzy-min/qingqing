@@ -36,6 +36,7 @@ function BellIcon() {
 
 const PAGE_TITLES = {
   '/dashboard': '工作台总览',
+  '/chat': 'Chat',
   '/photo': '照片编辑',
   '/voice': '语音合成',
   '/music': '音乐生成',

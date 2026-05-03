@@ -13,7 +13,10 @@ const DEFAULT_SETTINGS = {
     musicBpm: 120,
     videoDuration: 6,
     videoResolution: '768P'
-  }
+  },
+  providerApiKeys: {},
+  providerBaseUrls: {},
+  providerSecrets: {}
 }
 
 function canUseStorage() {
@@ -22,6 +25,17 @@ function canUseStorage() {
 
 function safeObject(value, fallback) {
   return value && typeof value === 'object' ? value : fallback
+}
+
+function sanitizeProviderMap(raw, fallback) {
+  const input = safeObject(raw, fallback)
+  const result = {}
+  for (const [key, value] of Object.entries(input)) {
+    if (typeof key === 'string' && typeof value === 'string') {
+      result[key] = value
+    }
+  }
+  return result
 }
 
 function sanitizeSettings(raw) {
@@ -56,7 +70,10 @@ function sanitizeSettings(raw) {
       videoResolution: typeof defaultParams.videoResolution === 'string' && defaultParams.videoResolution.trim()
         ? defaultParams.videoResolution.trim()
         : DEFAULT_SETTINGS.defaultParams.videoResolution
-    }
+    },
+    providerApiKeys: sanitizeProviderMap(input.providerApiKeys, {}),
+    providerBaseUrls: sanitizeProviderMap(input.providerBaseUrls, {}),
+    providerSecrets: sanitizeProviderMap(input.providerSecrets, {})
   }
 }
 
@@ -82,6 +99,10 @@ export function saveWorkbenchSettings(nextSettings) {
   if (!canUseStorage()) return sanitized
   try {
     window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(sanitized))
+    // Also write provider keys as separate entries for direct header injection.
+    window.localStorage.setItem('providerApiKeys', JSON.stringify(sanitized.providerApiKeys || {}))
+    window.localStorage.setItem('providerBaseUrls', JSON.stringify(sanitized.providerBaseUrls || {}))
+    window.localStorage.setItem('providerSecrets', JSON.stringify(sanitized.providerSecrets || {}))
   } catch {
     // Ignore write failure for private mode or storage quota.
   }
@@ -100,6 +121,18 @@ export function patchWorkbenchSettings(partial) {
     defaultParams: {
       ...current.defaultParams,
       ...(partial?.defaultParams || {})
+    },
+    providerApiKeys: {
+      ...(current.providerApiKeys || {}),
+      ...(partial?.providerApiKeys || {})
+    },
+    providerBaseUrls: {
+      ...(current.providerBaseUrls || {}),
+      ...(partial?.providerBaseUrls || {})
+    },
+    providerSecrets: {
+      ...(current.providerSecrets || {}),
+      ...(partial?.providerSecrets || {})
     }
   }
   return saveWorkbenchSettings(merged)
