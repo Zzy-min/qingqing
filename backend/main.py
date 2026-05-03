@@ -79,6 +79,27 @@ app.include_router(tts_router, prefix="/api")
 app.include_router(music_router, prefix="/api")
 app.include_router(video_router, prefix="/api")
 
+# ── Gateway: Multi-Provider Unified API ──
+from gateway.adapters import discover_adapters
+from gateway.routers import chat as gw_chat, image as gw_image, tts as gw_tts, music as gw_music, video as gw_video, models as gw_models, tasks as gw_tasks
+from gateway.errors import ModelNotFoundError, AuthError, ProviderError
+from gateway.errors import model_not_found_handler, capability_handler, auth_handler, provider_handler, generic_handler
+from gateway.adapters.base import CapabilityNotSupported as _CapNotSupported
+
+app.add_exception_handler(ModelNotFoundError, model_not_found_handler)
+app.add_exception_handler(_CapNotSupported, capability_handler)
+app.add_exception_handler(AuthError, auth_handler)
+app.add_exception_handler(ProviderError, provider_handler)
+app.add_exception_handler(Exception, generic_handler)
+
+app.include_router(gw_chat.router)
+app.include_router(gw_image.router)
+app.include_router(gw_tts.router)
+app.include_router(gw_music.router)
+app.include_router(gw_video.router)
+app.include_router(gw_models.router)
+app.include_router(gw_tasks.router)
+
 # TTS output files (local storage to avoid CORS)
 TTS_AUDIO_DIR = get_tts_audio_dir()
 os.makedirs(TTS_AUDIO_DIR, exist_ok=True)
@@ -133,6 +154,7 @@ async def startup():
     logger.info("MiniMax Photo Agent API v%s starting up...", APP_VERSION)
     config = load_minimax_config()
     log_minimax_bases(logger, config)
+    discover_adapters()
 
 
 @app.on_event("shutdown")
