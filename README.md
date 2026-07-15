@@ -127,13 +127,28 @@ QINGQING_ALLOW_LOCAL_USER=true
 CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,http://localhost:3001
 QINGQING_DATABASE_PATH=./qingqing.db
 
-# 生产登录邮件（本地无 SMTP 时，request-code 可能返回 dev_code）
-# QINGQING_SMTP_HOST=
-# QINGQING_SMTP_PORT=587
+# 登录邮件 SMTP（未配置时：仅 loopback + ALLOW_LOCAL_USER 返回 dev_code）
+# 本地联调：docker compose 的 MailHog → SMTP 1025 / UI http://127.0.0.1:8025
+# QINGQING_SMTP_HOST=127.0.0.1
+# QINGQING_SMTP_PORT=1025
+# QINGQING_SMTP_TLS=none          # starttls | ssl | none（1025/25/2525 默认 none）
 # QINGQING_SMTP_USERNAME=
 # QINGQING_SMTP_PASSWORD=
 # QINGQING_SMTP_FROM=noreply@qingqing.local
+# QINGQING_SMTP_SUBJECT=轻青登录验证码
+# 生产示例：HOST=smtp.example.com PORT=587 TLS=starttls + 账号密码
 ```
+
+可选依赖联调（需 `docker compose up -d`）：
+
+```bash
+# backend venv 内
+pip install "psycopg[binary]" redis boto3
+# PowerShell: $env:QINGQING_RUN_INTEGRATION="1"
+pytest tests/test_smtp_login.py tests/test_optional_integration.py -q
+```
+
+联调报告见 `docs/superpowers/reviews/2026-07-15-compose-smtp-integration.md`。
 
 启动：
 
