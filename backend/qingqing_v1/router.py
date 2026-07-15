@@ -21,9 +21,11 @@ from gateway.registry.models import MODEL_REGISTRY
 from .auth import create_session_token, hash_login_code, verify_session_token
 from .events import event_bus
 from .planner import build_plan
+from .memory import add_note, delete_memory, list_memory
 from .security import decrypt_secret, encrypt_secret, validate_public_https_url
 from .skills import get_skill, list_skills
 from .store import store
+from .tools import invoke_tool, list_mcp_servers, list_tool_calls, list_tools
 from .execution import execute_chat_run, verify_provider_credential
 
 router = APIRouter(prefix="/api/v1", tags=["qingqing-v1"])
@@ -136,6 +138,21 @@ def describe_models(identity: Identity):
 class Preferences(BaseModel):
     advanced_mode_enabled: bool | None = None
     credential_preference: Literal["platform_first", "byok_first", "byok_only"] | None = None
+    memory_enabled: bool | None = None
+    style_notes: str | None = Field(None, max_length=1000)
+    avoid_notes: str | None = Field(None, max_length=1000)
+    preferred_tone: str | None = Field(None, max_length=120)
+
+
+class MemoryCreate(BaseModel):
+    content: str = Field(min_length=1, max_length=4000)
+    kind: str = Field(default="note", max_length=40)
+    tags: list[str] = Field(default_factory=list, max_length=12)
+
+
+class ToolInvokeRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    arguments: dict = Field(default_factory=dict)
 
 
 class RouteRequest(BaseModel):
@@ -289,6 +306,50 @@ def get_preferences(identity: Annotated[Identity, Depends(current_identity)]):
 def patch_preferences(body: Preferences, identity: Annotated[Identity, Depends(current_identity)]):
     value = {**store.get_preferences(identity.user_id), **body.model_dump(exclude_none=True)}
     store.save_preferences(identity.user_id, value); return value
+
+
+@router.get("/memory")
+def get_memory(identity: Annotated[Identity, Depends(current_identity)], q: str | None = None, limit: int = 50):
+    return {"items": list_memory(identity.user_id, limit=limit, query=q)}
+
+
+@router.post("/memory", status_code=201)
+def create_memory(body: MemoryCreate, identity: Annotated[Identity, Depends(current_identity)]):
+    tags = [str(tag)[:40] for tag in (body.tags or [])[:12]]
+    item = add_note(identity.user_id, body.content, kind=body.kind[:40], tags=tags)
+    return item
+
+
+@router.delete("/memory/{memory_id}", status_code=204)
+def remove_memory(memory_id: str, identity: Annotated[Identity, Depends(current_identity)]):
+    if not delete_memory(identity.user_id, memory_id):
+        raise HTTPException(404, "Memory not found")
+    return Response(status_code=204)
+
+
+@router.get("/tools")
+def get_tools(identity: Annotated[Identity, Depends(current_identity)]):
+    return {"tools": list_tools(), "mcp_servers": list_mcp_servers()}
+
+
+@router.post("/tools/invoke")
+def post_tool_invoke(body: ToolInvokeRequest, identity: Annotated[Identity, Depends(current_identity)]):
+    try:
+        return invoke_tool(identity.user_id, body.name, body.arguments or {})
+    except ValueError:
+        raise HTTPException(404, "Unknown tool")
+    except Exception:
+        raise HTTPException(500, "Tool execution failed")
+
+
+@router.get("/tools/calls")
+def get_tool_calls(identity: Annotated[Identity, Depends(current_identity)], limit: int = 50):
+    return {"calls": list_tool_calls(identity.user_id, limit=limit)}
+
+
+@router.get("/mcp/servers")
+def get_mcp_servers(identity: Annotated[Identity, Depends(current_identity)]):
+    return {"servers": list_mcp_servers()}
 
 
 @router.get("/models")

@@ -11,6 +11,7 @@ from gateway.schemas.music import MusicRequest
 from gateway.schemas.tts import TTSRequest
 from gateway.schemas.video import VideoRequest
 from .events import event_bus
+from .memory import build_memory_context, remember_run
 from .planner import resolve_step_prompt, topological_invocation_order
 from .security import decrypt_secret, validate_public_https_url
 from .store import store
@@ -58,6 +59,10 @@ async def execute_chat_run(user_id: str, run_id: str):
                 model=model,
             )
             step_goal = resolve_step_prompt(invocation, completed, run.get("goal") or "")
+            if invocation.get("capability") == "chat":
+                memory_ctx = build_memory_context(user_id, run.get("goal") or step_goal)
+                if memory_ctx:
+                    step_goal = f"{memory_ctx}\n\n---\n当前任务：\n{step_goal}"
             output = await _execute_capability(user_id, run_id, step_goal, invocation)
             done = {**invocation, "status": "completed", "output": output, "completed_at": _now(), "resolved_prompt": step_goal}
             store.save_invocation(user_id, done)
@@ -77,11 +82,16 @@ async def execute_chat_run(user_id: str, run_id: str):
             store.save_ledger(user_id, {"id": str(uuid4()), "run_id": run_id, "type": "charged", "amount": reserved, "created_at": _now()})
             store.save_ledger(user_id, {"id": str(uuid4()), "run_id": run_id, "type": "released", "amount": reserved, "created_at": _now()})
         final = store.get_run(user_id, run_id)
+        invocations = store.list_invocations(user_id, run_id)
+        try:
+            remember_run(user_id, final or run, invocations)
+        except Exception:
+            pass
         await _emit(
             run_id,
             "run_completed",
             status="completed",
-            run={**final, "invocations": store.list_invocations(user_id, run_id)},
+            run={**final, "invocations": invocations},
         )
     except Exception:
         for invocation in store.list_invocations(user_id, run_id):

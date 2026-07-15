@@ -41,10 +41,10 @@ def test_free_entitlements_and_preferences_are_independent(client):
     ent = client.get("/api/v1/me/entitlements").json()
     assert ent["plan"] == "free"
     assert ent["concurrent_run_limit"] == 1
-    assert client.get("/api/v1/me/preferences").json() == {
-        "advanced_mode_enabled": False,
-        "credential_preference": "platform_first",
-    }
+    prefs = client.get("/api/v1/me/preferences").json()
+    assert prefs["advanced_mode_enabled"] is False
+    assert prefs["credential_preference"] == "platform_first"
+    assert prefs["memory_enabled"] is True
     updated = client.patch("/api/v1/me/preferences", json={"advanced_mode_enabled": True, "credential_preference": "byok_first"})
     assert updated.status_code == 200
     assert updated.json()["advanced_mode_enabled"] is True

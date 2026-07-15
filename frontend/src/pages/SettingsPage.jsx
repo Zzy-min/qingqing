@@ -12,6 +12,20 @@ export default function SettingsPage() {
   const [credentials, setCredentials] = useState([])
   const [form, setForm] = useState(EMPTY_CREDENTIAL)
   const [customModels, setCustomModels] = useState([])
+  const [memoryEnabled, setMemoryEnabled] = useState(true)
+  const [styleNotes, setStyleNotes] = useState('')
+  const [avoidNotes, setAvoidNotes] = useState('')
+  const [preferredTone, setPreferredTone] = useState('')
+  const [memoryItems, setMemoryItems] = useState([])
+  const [memoryNote, setMemoryNote] = useState('')
+  const [tools, setTools] = useState([])
+
+  const reloadMemory = () => {
+    apiFetch('/api/v1/memory?limit=20')
+      .then((r) => (r.ok ? r.json() : { items: [] }))
+      .then((data) => setMemoryItems(data.items || []))
+      .catch(() => {})
+  }
 
   useEffect(() => {
     let activeRequest = true
@@ -22,8 +36,17 @@ export default function SettingsPage() {
         const advancedModeEnabled = preferences.advanced_mode_enabled === true
         const credentialPreference = preferences.credential_preference || 'platform_first'
         setAdvanced(advancedModeEnabled)
+        setMemoryEnabled(preferences.memory_enabled !== false)
+        setStyleNotes(preferences.style_notes || '')
+        setAvoidNotes(preferences.avoid_notes || '')
+        setPreferredTone(preferences.preferred_tone || '')
         replaceSettings({ ...settings, advancedModeEnabled, credentialPreference })
       })
+      .catch(() => {})
+    reloadMemory()
+    apiFetch('/api/v1/tools')
+      .then((r) => (r.ok ? r.json() : { tools: [] }))
+      .then((data) => setTools(data.tools || []))
       .catch(() => {})
     return () => { activeRequest = false }
   }, [])
@@ -102,6 +125,122 @@ export default function SettingsPage() {
           <label className="settings-field"><span className="settings-field-label">视频时长（秒）</span><input className="field-input" type="number" min="3" max="10" value={settings.defaultParams?.videoDuration ?? 6} onChange={(e) => replaceSettings({ ...settings, defaultParams: { ...settings.defaultParams, videoDuration: Number(e.target.value) } })} /></label>
           <label className="settings-field"><span className="settings-field-label">视频分辨率</span><select className="field-input" value={settings.defaultParams?.videoResolution ?? '768P'} onChange={(e) => replaceSettings({ ...settings, defaultParams: { ...settings.defaultParams, videoResolution: e.target.value } })}><option>512P</option><option>720P</option><option>768P</option><option>1080P</option></select></label>
         </div>
+      </section>
+
+      <section className="card-shell settings-card mb-5">
+        <h3 className="section-title">记忆与风格</h3>
+        <p className="mb-3 text-xs text-gray-500">完成创作后自动写入摘要；对话任务会注入相关记忆与风格偏好。</p>
+        <label className="mb-3 flex items-center gap-3 text-sm">
+          <input
+            type="checkbox"
+            checked={memoryEnabled}
+            onChange={async (e) => {
+              const enabled = e.target.checked
+              const response = await apiFetch('/api/v1/me/preferences', {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ memory_enabled: enabled }),
+              })
+              if (response.ok) setMemoryEnabled(enabled)
+              else pushToast('error', '记忆开关保存失败')
+            }}
+          />
+          <span>启用跨会话记忆</span>
+        </label>
+        <div className="grid gap-3 md:grid-cols-3">
+          <label className="settings-field">
+            <span className="settings-field-label">语气</span>
+            <input className="field-input" value={preferredTone} onChange={(e) => setPreferredTone(e.target.value)} placeholder="温和 / 专业 / 活泼" />
+          </label>
+          <label className="settings-field md:col-span-1">
+            <span className="settings-field-label">风格笔记</span>
+            <input className="field-input" value={styleNotes} onChange={(e) => setStyleNotes(e.target.value)} placeholder="留白、浅青、低饱和…" />
+          </label>
+          <label className="settings-field">
+            <span className="settings-field-label">避免</span>
+            <input className="field-input" value={avoidNotes} onChange={(e) => setAvoidNotes(e.target.value)} placeholder="过密排版、霓虹高饱和…" />
+          </label>
+        </div>
+        <button
+          type="button"
+          className="btn-secondary mt-3"
+          onClick={async () => {
+            const response = await apiFetch('/api/v1/me/preferences', {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                style_notes: styleNotes,
+                avoid_notes: avoidNotes,
+                preferred_tone: preferredTone,
+              }),
+            })
+            pushToast(response.ok ? 'success' : 'error', response.ok ? '风格偏好已保存' : '风格偏好保存失败')
+          }}
+        >
+          保存风格偏好
+        </button>
+        <div className="mt-4 flex gap-2">
+          <input
+            className="field-input flex-1"
+            value={memoryNote}
+            onChange={(e) => setMemoryNote(e.target.value)}
+            placeholder="手动添加一条记忆笔记…"
+          />
+          <button
+            type="button"
+            className="btn-gradient"
+            onClick={async () => {
+              if (!memoryNote.trim()) return
+              const response = await apiFetch('/api/v1/memory', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ content: memoryNote.trim(), kind: 'note' }),
+              })
+              if (!response.ok) return pushToast('error', '记忆添加失败')
+              setMemoryNote('')
+              reloadMemory()
+              pushToast('success', '记忆已添加')
+            }}
+          >
+            添加
+          </button>
+        </div>
+        <div className="mt-3 max-h-48 space-y-2 overflow-y-auto">
+          {memoryItems.length === 0 ? (
+            <p className="text-sm text-gray-500">暂无记忆。完成一次创作后会自动出现摘要。</p>
+          ) : (
+            memoryItems.map((item) => (
+              <div key={item.id} className="flex items-start justify-between gap-2 rounded-lg border border-gray-200 p-3 text-sm">
+                <div className="min-w-0 flex-1">
+                  <div className="text-xs text-gray-400">{item.kind} · {item.created_at ? new Date(item.created_at).toLocaleString() : ''}</div>
+                  <div className="mt-1 whitespace-pre-wrap text-gray-700">{item.content}</div>
+                </div>
+                <button
+                  type="button"
+                  className="btn-secondary shrink-0"
+                  onClick={async () => {
+                    const response = await apiFetch(`/api/v1/memory/${encodeURIComponent(item.id)}`, { method: 'DELETE' })
+                    if (response.ok) setMemoryItems((cur) => cur.filter((m) => m.id !== item.id))
+                  }}
+                >
+                  删除
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+        {tools.length > 0 ? (
+          <div className="mt-4 border-t border-gray-100 pt-3">
+            <div className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-400">内置工具（审计可调用）</div>
+            <div className="flex flex-wrap gap-2">
+              {tools.map((tool) => (
+                <span key={tool.name} className="rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-600" title={tool.description}>
+                  {tool.name}
+                </span>
+              ))}
+            </div>
+          </div>
+        ) : null}
       </section>
 
       <section className="card-shell settings-card">

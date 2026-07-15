@@ -235,6 +235,52 @@ def test_skill_run_executes_multiple_steps_in_order(client_fixture, monkeypatch)
     assert {item["capability"] for item in done["invocations"] if item["status"] == "completed"} == {"image", "tts", "music", "video"}
 
 
+def test_memory_and_tools_are_audited(client_fixture, monkeypatch):
+    monkeypatch.setenv("QINGQING_ALLOW_LOCAL_USER", "true")
+    note = client_fixture.post("/api/v1/memory", json={"content": "喜欢浅青配色与留白", "kind": "note", "tags": ["style"]})
+    assert note.status_code == 201
+    listed = client_fixture.get("/api/v1/memory?q=浅青").json()["items"]
+    assert any("浅青" in item["content"] for item in listed)
+    tools = client_fixture.get("/api/v1/tools").json()
+    assert any(item["name"] == "search_memory" for item in tools["tools"])
+    invoked = client_fixture.post("/api/v1/tools/invoke", json={"name": "search_memory", "arguments": {"query": "浅青"}})
+    assert invoked.status_code == 200
+    assert invoked.json()["status"] == "completed"
+    calls = client_fixture.get("/api/v1/tools/calls").json()["calls"]
+    assert any(call["tool"] == "search_memory" for call in calls)
+    assert client_fixture.get("/api/v1/mcp/servers").status_code == 200
+
+
+def test_completed_run_writes_memory_and_injects_on_chat(client_fixture, monkeypatch):
+    monkeypatch.setenv("QINGQING_ALLOW_LOCAL_USER", "true")
+    from gateway.schemas.chat import ChatChunk
+    seen = {"prompts": []}
+
+    class CapturingAdapter:
+        async def chat(self, request):
+            text = request.messages[-1].content if request.messages else ""
+            seen["prompts"].append(text)
+            yield ChatChunk(model=request.model, delta="ok")
+
+    monkeypatch.setattr("qingqing_v1.execution.get_adapter", lambda provider: CapturingAdapter())
+    first = client_fixture.post(
+        "/api/v1/agent/runs",
+        headers={"Idempotency-Key": "mem-1"},
+        json={"goal": "浅青品牌介绍", "skill_id": "social-copy", "routing": {"capability": "chat", "mode": "auto", "credential_preference": "platform_first", "stage_overrides": {}, "budget_limit": 1}},
+    ).json()
+    client_fixture.post(f'/api/v1/agent/runs/{first["id"]}/execute')
+    mem = client_fixture.get("/api/v1/memory?q=浅青").json()["items"]
+    assert any(item.get("run_id") == first["id"] for item in mem)
+    client_fixture.patch("/api/v1/me/preferences", json={"style_notes": "留白、低饱和", "preferred_tone": "温和"})
+    second = client_fixture.post(
+        "/api/v1/agent/runs",
+        headers={"Idempotency-Key": "mem-2"},
+        json={"goal": "继续浅青风格文案", "skill_id": "social-copy", "routing": {"capability": "chat", "mode": "auto", "credential_preference": "platform_first", "stage_overrides": {}, "budget_limit": 1}},
+    ).json()
+    client_fixture.post(f'/api/v1/agent/runs/{second["id"]}/execute')
+    assert any("用户偏好" in p or "历史记忆" in p for p in seen["prompts"])
+
+
 def test_step_retry_requeues_failed_step(client_fixture, monkeypatch):
     monkeypatch.setenv("QINGQING_ALLOW_LOCAL_USER", "true")
     from gateway.schemas.chat import ChatChunk

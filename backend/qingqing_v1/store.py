@@ -8,6 +8,10 @@ from pathlib import Path
 DEFAULT_PREFERENCES = {
     "advanced_mode_enabled": False,
     "credential_preference": "platform_first",
+    "memory_enabled": True,
+    "style_notes": "",
+    "avoid_notes": "",
+    "preferred_tone": "",
 }
 
 
@@ -33,11 +37,26 @@ class SqliteStore:
         CREATE TABLE IF NOT EXISTS invocations(id TEXT PRIMARY KEY, user_id TEXT NOT NULL, run_id TEXT NOT NULL, payload TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS ledger(id TEXT PRIMARY KEY, user_id TEXT NOT NULL, run_id TEXT NOT NULL, payload TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS artifacts(id TEXT PRIMARY KEY, user_id TEXT NOT NULL, run_id TEXT NOT NULL, payload TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS memory_items(id TEXT PRIMARY KEY, user_id TEXT NOT NULL, payload TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS tool_calls(id TEXT PRIMARY KEY, user_id TEXT NOT NULL, payload TEXT NOT NULL);
         """)
 
     def reset(self):
         with self.lock:
-            for table in ("auth_codes", "identities", "artifacts", "ledger", "invocations", "runs", "custom_models", "credentials", "preferences", "users"):
+            for table in (
+                "auth_codes",
+                "identities",
+                "artifacts",
+                "ledger",
+                "invocations",
+                "runs",
+                "custom_models",
+                "credentials",
+                "preferences",
+                "memory_items",
+                "tool_calls",
+                "users",
+            ):
                 self.db.execute(f"DELETE FROM {table}")
             self.db.commit()
 
@@ -111,6 +130,11 @@ class SqliteStore:
                 self.db.execute(
                     f"INSERT OR REPLACE INTO {table}(id,user_id,run_id,payload) VALUES(?,?,?,?)",
                     (value["id"], uid, value["run_id"], json.dumps(value)),
+                )
+            elif table in {"memory_items", "tool_calls", "credentials", "custom_models"}:
+                self.db.execute(
+                    f"INSERT OR REPLACE INTO {table}(id,user_id,payload) VALUES(?,?,?)",
+                    (value["id"], uid, json.dumps(value)),
                 )
             else:
                 self.db.execute(f"INSERT OR REPLACE INTO {table}(id,user_id,payload) VALUES(?,?,?)", (value["id"], uid, json.dumps(value)))
@@ -198,6 +222,15 @@ class SqliteStore:
         values = self._list("artifacts", uid)
         return [value for value in values if run_id is None or value["run_id"] == run_id]
     def get_artifact(self, uid, item_id): return self._get("artifacts", uid, item_id)
+
+    def save_memory(self, uid, value): self._save("memory_items", uid, value)
+    def list_memory(self, uid): return self._list("memory_items", uid)
+    def get_memory(self, uid, item_id): return self._get("memory_items", uid, item_id)
+    def delete_memory(self, uid, item_id): return self._delete("memory_items", uid, item_id)
+
+    def save_tool_call(self, uid, value): self._save("tool_calls", uid, value)
+    def list_tool_calls(self, uid): return self._list("tool_calls", uid)
+    def get_tool_call(self, uid, item_id): return self._get("tool_calls", uid, item_id)
 
 
 def _default_database_path() -> Path:

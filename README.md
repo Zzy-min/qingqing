@@ -14,16 +14,16 @@
 | 高阶 BYOK | 加密托管供应商密钥；OpenAI 兼容自定义端点（HTTPS + SSRF 校验） |
 | 多端 | React Web 工作台 + Flutter（Web / Windows / Android） |
 
-### 当前能力边界（Phase 0–2）
+### 当前能力边界（Phase 0–3）
 
 | 已具备 | 尚未具备（后续阶段） |
 |--------|----------------------|
-| 创建 Run 后**轮询终态**并展示模型输出 | 跨会话记忆 / MCP 工具（Phase 3） |
-| **SSE** `GET /api/v1/agent/runs/{id}/events` | 耐久 Worker / PostgreSQL（Phase 4） |
-| **Planner + Skills** 多步配方与 step retry | Flutter SSE / Skills 对齐 |
-| 预算超限审批后再执行并取回结果 | |
+| 创建 Run 后**轮询终态**并展示模型输出 | 耐久 Worker / PostgreSQL / KMS（Phase 4） |
+| **SSE** 进度与 chat delta | 完整 MCP 远程工具调用 |
+| **Planner + Skills** 多步配方与 step retry | 向量 RAG / 企业知识库 |
+| **记忆** 摘要 + 风格偏好注入 chat | Flutter 记忆/工具对齐 |
+| **内置工具** + 调用审计 + MCP 白名单登记 | |
 | Dashboard Composer + 模态页 AgentRun | |
-| 路由透明（模型、原因、费用区间） | |
 | 生产默认仅 `/api/v1` | |
 
 改造蓝图见 `docs/superpowers/specs/`。
@@ -160,6 +160,10 @@ puro -e stable flutter build windows --release --dart-define=API_BASE_URL=https:
 | GET | `/api/v1/skills` | 内置创作 Skills 目录 |
 | POST | `/api/v1/agent/plans/preview` | 预览多步计划（不落库） |
 | POST | `/api/v1/agent/runs/{id}/steps/{step_id}/retry` | 单步重试 |
+| GET/POST/DELETE | `/api/v1/memory` | 跨会话记忆与笔记 |
+| GET | `/api/v1/tools` | 内置工具目录 + MCP 白名单元数据 |
+| POST | `/api/v1/tools/invoke` | 调用内置工具（审计） |
+| GET | `/api/v1/tools/calls` | 工具调用审计列表 |
 | GET/POST/… | `/api/v1/credentials` | BYOK 凭据（密钥不回显） |
 | GET/POST/… | `/api/v1/custom-models` | 自定义 OpenAI 兼容端点 |
 | GET | `/api/v1/artifacts` | 作品 / 产物 |
