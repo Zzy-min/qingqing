@@ -235,6 +235,68 @@ def test_skill_run_executes_multiple_steps_in_order(client_fixture, monkeypatch)
     assert {item["capability"] for item in done["invocations"] if item["status"] == "completed"} == {"image", "tts", "music", "video"}
 
 
+def test_v1_health_is_public(client_fixture):
+    response = client_fixture.get("/api/v1/health")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert "worker_mode" in body
+
+
+def test_credential_key_rotation_supports_previous_key(monkeypatch):
+    from qingqing_v1.security import decrypt_secret, encrypt_secret
+
+    monkeypatch.setenv("QINGQING_CREDENTIAL_KEY", "primary-key-material-for-tests")
+    cipher = encrypt_secret("hello-secret")
+    monkeypatch.setenv("QINGQING_CREDENTIAL_KEY", "rotated-primary-key-material")
+    monkeypatch.setenv("QINGQING_CREDENTIAL_KEY_PREVIOUS", "primary-key-material-for-tests")
+    assert decrypt_secret(cipher) == "hello-secret"
+
+
+def test_remote_artifact_proxy_fetches_via_safe_download(client_fixture, monkeypatch):
+    monkeypatch.setenv("QINGQING_ALLOW_LOCAL_USER", "true")
+    from qingqing_v1.store import store
+
+    artifact = {
+        "id": "remote-1",
+        "run_id": "r1",
+        "kind": "image",
+        "storage": "remote",
+        "remote_url": "https://example.com/pic.png",
+        "created_at": "2026-01-01T00:00:00+00:00",
+    }
+    store.save_artifact("local-user", artifact)
+
+    async def fake_fetch(url, max_bytes=20 * 1024 * 1024):
+        assert "example.com" in url
+        return b"png-bytes"
+
+    monkeypatch.setattr("qingqing_v1.router.fetch_remote_artifact_bytes", fake_fetch)
+    response = client_fixture.get("/api/v1/artifacts/remote-1/content")
+    assert response.status_code == 200
+    assert response.content == b"png-bytes"
+
+
+def test_execute_reports_worker_metadata(client_fixture, monkeypatch):
+    monkeypatch.setenv("QINGQING_ALLOW_LOCAL_USER", "true")
+    from gateway.schemas.chat import ChatChunk
+
+    class FakeAdapter:
+        async def chat(self, request):
+            yield ChatChunk(model=request.model, delta="w")
+
+    monkeypatch.setattr("qingqing_v1.execution.get_adapter", lambda provider: FakeAdapter())
+    run = client_fixture.post(
+        "/api/v1/agent/runs",
+        headers={"Idempotency-Key": "worker-meta"},
+        json={"goal": "hi", "skill_id": "social-copy", "routing": {"capability": "chat", "mode": "auto", "credential_preference": "platform_first", "stage_overrides": {}, "budget_limit": 1}},
+    ).json()
+    executed = client_fixture.post(f'/api/v1/agent/runs/{run["id"]}/execute')
+    assert executed.status_code == 202
+    assert executed.json()["worker"]["mode"] in {"background", "inline", "durable"}
+    assert executed.json()["worker"]["run_id"] == run["id"]
+
+
 def test_memory_and_tools_are_audited(client_fixture, monkeypatch):
     monkeypatch.setenv("QINGQING_ALLOW_LOCAL_USER", "true")
     note = client_fixture.post("/api/v1/memory", json={"content": "喜欢浅青配色与留白", "kind": "note", "tags": ["style"]})

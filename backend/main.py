@@ -24,6 +24,7 @@ from api.routes_tts import router as tts_router, get_tts_service
 from api.routes_music import router as music_router, get_music_service
 from api.routes_video import router as video_router, get_video_service
 from gateway.adapters import discover_adapters
+from qingqing_v1.observability import RequestIdMiddleware
 
 
 @asynccontextmanager
@@ -58,6 +59,8 @@ app = FastAPI(
     version=APP_VERSION,
     lifespan=lifespan,
 )
+
+app.add_middleware(RequestIdMiddleware)
 
 MAX_REQUEST_BODY = 20 * 1024 * 1024
 MAX_REQUEST_BODY_MUSIC_COVER = 80 * 1024 * 1024

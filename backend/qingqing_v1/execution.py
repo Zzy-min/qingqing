@@ -1,5 +1,4 @@
 from datetime import datetime, timezone
-from pathlib import Path
 from uuid import uuid4
 
 import httpx
@@ -14,6 +13,7 @@ from .events import event_bus
 from .memory import build_memory_context, remember_run
 from .planner import resolve_step_prompt, topological_invocation_order
 from .security import decrypt_secret, validate_public_https_url
+from .storage import get_artifact_storage
 from .store import store
 
 
@@ -259,24 +259,12 @@ async def _execute_byok_image(user_id: str, run_id: str, goal: str, model: dict)
     return output
 
 
-def _artifact_root() -> Path:
-    root = Path(__file__).resolve().parents[1] / "artifacts"
-    root.mkdir(parents=True, exist_ok=True)
-    return root
-
-
 def _write_artifact(user_id: str, run_id: str, kind: str, extension: str, content: bytes, model_id: str):
-    artifact_id = str(uuid4())
-    path = (_artifact_root() / f"{artifact_id}.{extension}").resolve()
-    path.write_bytes(content)
+    stored = get_artifact_storage().write_bytes(kind, extension, content)
     item = {
-        "id": artifact_id,
+        **stored,
         "run_id": run_id,
-        "kind": kind,
         "model_id": model_id,
-        "storage": "local",
-        "file_path": str(path),
-        "size": len(content),
         "created_at": _now(),
     }
     store.save_artifact(user_id, item)

@@ -14,16 +14,19 @@
 | 高阶 BYOK | 加密托管供应商密钥；OpenAI 兼容自定义端点（HTTPS + SSRF 校验） |
 | 多端 | React Web 工作台 + Flutter（Web / Windows / Android） |
 
-### 当前能力边界（Phase 0–3）
+### 当前能力边界（Phase 0–4）
 
-| 已具备 | 尚未具备（后续阶段） |
+| 已具备 | 尚未具备 / 可后续加深 |
 |--------|----------------------|
-| 创建 Run 后**轮询终态**并展示模型输出 | 耐久 Worker / PostgreSQL / KMS（Phase 4） |
-| **SSE** 进度与 chat delta | 完整 MCP 远程工具调用 |
-| **Planner + Skills** 多步配方与 step retry | 向量 RAG / 企业知识库 |
-| **记忆** 摘要 + 风格偏好注入 chat | Flutter 记忆/工具对齐 |
-| **内置工具** + 调用审计 + MCP 白名单登记 | |
-| Dashboard Composer + 模态页 AgentRun | |
+| 创建 Run 后**轮询终态**并展示模型输出 | 完整 Redis/Celery 多进程 Worker |
+| **SSE** 进度与 chat delta | PostgreSQL 生产仓储适配器 |
+| **Planner + Skills** 多步配方与 step retry | 云 KMS / 对象存储 S3 真对接 |
+| **记忆** 摘要 + 风格偏好注入 chat | 向量 RAG / 企业知识库 |
+| **内置工具** + 调用审计 + MCP 白名单登记 | 完整 MCP 远程工具调用 |
+| **Worker 抽象**（background/inline/durable） | Flutter 全能力对齐 |
+| **远程 Artifact 代理下载** + 本地存储接口 | |
+| **请求 ID** 中间件 + 密钥 previous 轮换解密 | |
+| `GET /api/v1/health` 探活 | |
 | 生产默认仅 `/api/v1` | |
 
 改造蓝图见 `docs/superpowers/specs/`。
@@ -74,6 +77,13 @@ MINIMAX_API_KEY=YOUR_MINIMAX_API_KEY
 QINGQING_CREDENTIAL_KEY=replace-with-a-long-random-secret
 QINGQING_SESSION_SECRET=replace-with-another-long-random-secret
 QINGQING_CREDENTIAL_KEY_VERSION=1
+# 可选：轮换后的旧密钥（逗号分隔），用于解密历史凭据
+# QINGQING_CREDENTIAL_KEY_PREVIOUS=old-key-material
+
+# Worker：background（默认）| inline | durable
+# QINGQING_WORKER_MODE=background
+# QINGQING_WORKER_QUEUE_PATH=./artifacts/worker_queue.jsonl
+# QINGQING_ARTIFACT_ROOT=./artifacts
 
 # 本地开发：允许本机回环免登录（生产必须 false）
 QINGQING_ALLOW_LOCAL_USER=true
@@ -160,10 +170,12 @@ puro -e stable flutter build windows --release --dart-define=API_BASE_URL=https:
 | GET | `/api/v1/skills` | 内置创作 Skills 目录 |
 | POST | `/api/v1/agent/plans/preview` | 预览多步计划（不落库） |
 | POST | `/api/v1/agent/runs/{id}/steps/{step_id}/retry` | 单步重试 |
+| GET | `/api/v1/health` | 探活（无需鉴权） |
 | GET/POST/DELETE | `/api/v1/memory` | 跨会话记忆与笔记 |
 | GET | `/api/v1/tools` | 内置工具目录 + MCP 白名单元数据 |
 | POST | `/api/v1/tools/invoke` | 调用内置工具（审计） |
 | GET | `/api/v1/tools/calls` | 工具调用审计列表 |
+| GET | `/api/v1/artifacts/{id}/content` | 本地产物或远程 HTTPS 受控代理 |
 | GET/POST/… | `/api/v1/credentials` | BYOK 凭据（密钥不回显） |
 | GET/POST/… | `/api/v1/custom-models` | 自定义 OpenAI 兼容端点 |
 | GET | `/api/v1/artifacts` | 作品 / 产物 |

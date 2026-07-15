@@ -26,7 +26,9 @@ from .security import decrypt_secret, encrypt_secret, validate_public_https_url
 from .skills import get_skill, list_skills
 from .store import store
 from .tools import invoke_tool, list_mcp_servers, list_tool_calls, list_tools
-from .execution import execute_chat_run, verify_provider_credential
+from .execution import verify_provider_credential
+from .storage import fetch_remote_artifact_bytes, get_artifact_storage
+from .worker import schedule_run_execution
 
 router = APIRouter(prefix="/api/v1", tags=["qingqing-v1"])
 bearer = HTTPBearer(auto_error=False)
@@ -598,6 +600,17 @@ async def stream_run_events(run_id: str, identity: Annotated[Identity, Depends(c
     )
 
 
+@router.get("/health")
+def v1_health():
+    """Liveness probe (no auth)."""
+    return {
+        "status": "ok",
+        "service": "qingqing-v1",
+        "worker_mode": (os.environ.get("QINGQING_WORKER_MODE") or "background"),
+        "time": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 @router.post("/agent/runs/{run_id}/execute", status_code=202)
 def execute_run(run_id: str, background: BackgroundTasks, identity: Annotated[Identity, Depends(current_identity)]):
     run = store.get_run(identity.user_id, run_id)
@@ -609,8 +622,8 @@ def execute_run(run_id: str, background: BackgroundTasks, identity: Annotated[Id
         {"status": "running", "started_at": datetime.now(timezone.utc).isoformat()},
     )
     if not running: raise HTTPException(409, "Run is not ready for execution")
-    background.add_task(execute_chat_run, identity.user_id, run_id)
-    return running
+    job = schedule_run_execution(identity.user_id, run_id, background)
+    return {**running, "worker": job}
 
 
 @router.post("/agent/runs/{run_id}/approve")
@@ -698,12 +711,34 @@ def list_artifacts(identity: Annotated[Identity, Depends(current_identity)], run
 
 
 @router.get("/artifacts/{artifact_id}/content")
-def artifact_content(artifact_id: str, identity: Annotated[Identity, Depends(current_identity)]):
+async def artifact_content(artifact_id: str, identity: Annotated[Identity, Depends(current_identity)]):
+    """Serve local artifacts or proxy remote HTTPS artifacts with SSRF checks."""
     artifact = store.get_artifact(identity.user_id, artifact_id)
-    if not artifact or artifact.get("storage") != "local": raise HTTPException(404, "Artifact content not found")
-    root = (Path(__file__).resolve().parents[1] / "artifacts").resolve(); path = Path(artifact["file_path"]).resolve()
-    if root not in path.parents or not path.is_file(): raise HTTPException(404, "Artifact content not found")
-    return FileResponse(path)
+    if not artifact:
+        raise HTTPException(404, "Artifact content not found")
+    storage_kind = artifact.get("storage")
+    if storage_kind == "local":
+        path = get_artifact_storage().resolve_local_path(artifact.get("file_path") or "")
+        if path is None:
+            raise HTTPException(404, "Artifact content not found")
+        return FileResponse(path)
+    if storage_kind == "remote":
+        remote_url = artifact.get("remote_url")
+        if not remote_url:
+            raise HTTPException(404, "Artifact content not found")
+        try:
+            content = await fetch_remote_artifact_bytes(remote_url)
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(502, "Failed to fetch remote artifact")
+        media = {
+            "image": "image/png",
+            "audio": "audio/mpeg",
+            "video": "video/mp4",
+        }.get(artifact.get("kind") or "", "application/octet-stream")
+        return Response(content=content, media_type=media)
+    raise HTTPException(404, "Artifact content not found")
 
 
 @router.get("/credentials")
