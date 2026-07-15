@@ -50,7 +50,22 @@ qingqing/
 - **Clients:** Flutter（Web / Windows / Android）
 - **模型接入:** 多供应商注册表；平台 Key 与用户 BYOK 可组合路由
 
-## 快速开始
+## 可选依赖（Docker）
+
+本地一键起 PostgreSQL / Redis / MinIO：
+
+```bash
+docker compose up -d
+```
+
+集成测试（服务可用时）：
+
+```bash
+cd backend
+pip install "psycopg[binary]" redis boto3
+set QINGQING_RUN_INTEGRATION=1
+python -m pytest tests/test_optional_integration.py -q
+```
 
 ### 1. 后端
 

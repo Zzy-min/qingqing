@@ -15,12 +15,17 @@ class AppController extends ChangeNotifier {
   bool authenticated = false;
   bool busy = false;
   bool advancedMode = false;
+  bool memoryEnabled = true;
   String credentialPreference = 'platform_first';
+  String preferredTone = '';
+  String styleNotes = '';
+  String avoidNotes = '';
   String? devCode;
   String? error;
 
   List<dynamic> activeRuns = [];
   List<dynamic> artifacts = [];
+  List<dynamic> memoryItems = [];
   Map<String, dynamic>? entitlements;
   final Set<String> _pollingRunIds = {};
 
@@ -37,6 +42,7 @@ class AppController extends ChangeNotifier {
         loadPreferences(),
         loadRuns(),
         loadArtifacts(),
+        loadMemory(),
       ]);
     } on ApiException {
       await _storage.delete(key: _tokenKey);
@@ -73,6 +79,7 @@ class AppController extends ChangeNotifier {
         loadPreferences(),
         loadRuns(),
         loadArtifacts(),
+        loadMemory(),
       ]);
     });
   }
@@ -95,10 +102,32 @@ class AppController extends ChangeNotifier {
       advancedMode = data['advanced_mode_enabled'] == true;
       credentialPreference =
           data['credential_preference']?.toString() ?? 'platform_first';
+      memoryEnabled = data['memory_enabled'] != false;
+      preferredTone = data['preferred_tone']?.toString() ?? '';
+      styleNotes = data['style_notes']?.toString() ?? '';
+      avoidNotes = data['avoid_notes']?.toString() ?? '';
       notifyListeners();
     } on ApiException catch (exception) {
       if (exception.statusCode == 401) await logout();
       error = exception.message;
+      notifyListeners();
+    }
+  }
+
+  Future<void> loadMemory({String? query}) async {
+    try {
+      final path = query == null || query.isEmpty
+          ? '/api/v1/memory?limit=30'
+          : '/api/v1/memory?limit=30&q=${Uri.encodeQueryComponent(query)}';
+      final data = await api.request(path);
+      memoryItems = List<dynamic>.from(data['items'] as List<dynamic>? ?? []);
+      notifyListeners();
+    } on ApiException catch (exception) {
+      if (exception.statusCode == 401) await logout();
+      error = exception.message;
+      notifyListeners();
+    } catch (_) {
+      // Offline / settings shell without backend should not crash UI.
       notifyListeners();
     }
   }
@@ -229,7 +258,14 @@ class AppController extends ChangeNotifier {
     });
   }
 
-  Future<void> savePreferences({bool? advanced, String? credential}) async {
+  Future<void> savePreferences({
+    bool? advanced,
+    String? credential,
+    bool? memory,
+    String? tone,
+    String? style,
+    String? avoid,
+  }) async {
     await _guard(() async {
       final body = <String, Object>{};
       if (advanced != null) {
@@ -237,6 +273,18 @@ class AppController extends ChangeNotifier {
       }
       if (credential != null) {
         body['credential_preference'] = credential;
+      }
+      if (memory != null) {
+        body['memory_enabled'] = memory;
+      }
+      if (tone != null) {
+        body['preferred_tone'] = tone;
+      }
+      if (style != null) {
+        body['style_notes'] = style;
+      }
+      if (avoid != null) {
+        body['avoid_notes'] = avoid;
       }
       final data = await api.request(
         '/api/v1/me/preferences',
@@ -246,7 +294,29 @@ class AppController extends ChangeNotifier {
       advancedMode = data['advanced_mode_enabled'] == true;
       credentialPreference =
           data['credential_preference']?.toString() ?? credentialPreference;
+      memoryEnabled = data['memory_enabled'] != false;
+      preferredTone = data['preferred_tone']?.toString() ?? preferredTone;
+      styleNotes = data['style_notes']?.toString() ?? styleNotes;
+      avoidNotes = data['avoid_notes']?.toString() ?? avoidNotes;
       await loadEntitlements();
+    });
+  }
+
+  Future<void> addMemoryNote(String content) async {
+    await _guard(() async {
+      await api.request(
+        '/api/v1/memory',
+        method: 'POST',
+        body: {'content': content, 'kind': 'note'},
+      );
+      await loadMemory();
+    });
+  }
+
+  Future<void> deleteMemoryItem(String id) async {
+    await _guard(() async {
+      await api.request('/api/v1/memory/$id', method: 'DELETE');
+      memoryItems = memoryItems.where((item) => item['id'] != id).toList();
     });
   }
 
@@ -255,9 +325,14 @@ class AppController extends ChangeNotifier {
     api.token = null;
     authenticated = false;
     advancedMode = false;
+    memoryEnabled = true;
+    preferredTone = '';
+    styleNotes = '';
+    avoidNotes = '';
     credentialPreference = 'platform_first';
     activeRuns = [];
     artifacts = [];
+    memoryItems = [];
     entitlements = null;
     _pollingRunIds.clear();
     notifyListeners();

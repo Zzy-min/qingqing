@@ -127,6 +127,9 @@ class _LoginApi extends ApiClient {
 
 class _PreferencesApi extends ApiClient {
   String? savedCredentialPreference;
+  bool memoryEnabled = true;
+  String styleNotes = '';
+  final List<Map<String, dynamic>> notes = [];
 
   @override
   Future<Map<String, dynamic>> request(
@@ -135,14 +138,48 @@ class _PreferencesApi extends ApiClient {
     Object? body,
     Map<String, String>? headers,
   }) async {
+    if (path.startsWith('/api/v1/memory') && method == 'GET') {
+      return {'items': notes};
+    }
+    if (path == '/api/v1/memory' && method == 'POST') {
+      final values = body! as Map;
+      final item = {
+        'id': 'm-${notes.length + 1}',
+        'kind': 'note',
+        'content': values['content']?.toString() ?? '',
+        'created_at': '2026-01-01T00:00:00Z',
+      };
+      notes.add(item);
+      return item;
+    }
+    if (path == '/api/v1/me/preferences' && method == 'GET') {
+      return {
+        'advanced_mode_enabled': false,
+        'credential_preference': savedCredentialPreference ?? 'platform_first',
+        'memory_enabled': memoryEnabled,
+        'style_notes': styleNotes,
+        'avoid_notes': '',
+        'preferred_tone': '',
+      };
+    }
     if (path == '/api/v1/me/preferences' && method == 'PATCH') {
       final values = body! as Map<String, Object>;
       savedCredentialPreference =
           values['credential_preference']?.toString() ??
           savedCredentialPreference;
+      if (values.containsKey('memory_enabled')) {
+        memoryEnabled = values['memory_enabled'] == true;
+      }
+      if (values.containsKey('style_notes')) {
+        styleNotes = values['style_notes']?.toString() ?? styleNotes;
+      }
       return {
         'advanced_mode_enabled': true,
         'credential_preference': savedCredentialPreference ?? 'platform_first',
+        'memory_enabled': memoryEnabled,
+        'style_notes': styleNotes,
+        'avoid_notes': '',
+        'preferred_tone': '',
       };
     }
     if (path == '/api/v1/me/preferences') {
@@ -414,7 +451,7 @@ void main() {
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
-    final controller = AppController()
+    final controller = AppController(api: _PreferencesApi())
       ..advancedMode = true
       ..credentialPreference = 'platform_first';
 
@@ -427,10 +464,42 @@ void main() {
     expect(find.text('你的模型连接，由你掌控'), findsOneWidget);
     expect(find.text('调用偏好'), findsOneWidget);
     expect(find.text('连接管理'), findsOneWidget);
+    expect(find.text('记忆与风格'), findsOneWidget);
     expect(find.text('使用说明'), findsOneWidget);
     expect(find.byKey(const Key('settings-hero-art')), findsOneWidget);
     final title = tester.widget<Text>(find.text('设置'));
     expect(title.style?.fontSize, lessThanOrEqualTo(28));
+  });
+
+  testWidgets('settings memory section saves style and adds notes', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1440, 1600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final api = _PreferencesApi();
+    final controller = AppController(api: api)..authenticated = true;
+    await tester.pumpWidget(
+      MaterialApp(home: SettingsPage(controller: controller)),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('memory-enabled-switch')), findsOneWidget);
+    await tester.ensureVisible(find.byKey(const Key('memory-style-field')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('memory-style-field')), '浅青留白');
+    await tester.ensureVisible(find.text('保存风格偏好'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('保存风格偏好'));
+    await tester.pumpAndSettle();
+    expect(api.styleNotes, '浅青留白');
+    await tester.ensureVisible(find.byKey(const Key('memory-note-field')));
+    await tester.enterText(find.byKey(const Key('memory-note-field')), '记住客户喜欢极简');
+    await tester.pump();
+    await tester.ensureVisible(find.text('添加'));
+    await tester.tap(find.text('添加'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('记住客户喜欢极简'), findsOneWidget);
   });
 
   testWidgets('settings stays usable on mobile and saves API preference', (
@@ -464,19 +533,17 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
     final controller = AppController(api: _PreferencesApi())
       ..authenticated = true
-      ..advancedMode = true;
+      ..advancedMode = true
+      ..credentialPreference = 'platform_first';
 
+    // Capture SettingsPage directly for stable layout regression (no shell chrome).
     await tester.pumpWidget(
-      MaterialApp(home: AppShell(controller: controller)),
+      MaterialApp(home: SettingsPage(controller: controller)),
     );
-    await tester.pumpAndSettle();
-    await tester.tap(find.byType(PopupMenuButton<String>));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('系统偏好设置'));
     await tester.pumpAndSettle();
 
     await expectLater(
-      find.byType(AppShell),
+      find.byType(SettingsPage),
       matchesGoldenFile('goldens/settings_page_desktop.png'),
     );
   });

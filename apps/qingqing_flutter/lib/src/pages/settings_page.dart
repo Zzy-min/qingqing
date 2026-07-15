@@ -64,6 +64,8 @@ class SettingsPage extends StatelessWidget {
                           const SizedBox(height: 18),
                           _ConnectionColumn(controller: controller),
                         ],
+                        SizedBox(height: compact ? 18 : 24),
+                        _MemorySection(controller: controller),
                         const SizedBox(height: 24),
                         const Divider(color: QingColors.cardBorder),
                         const SizedBox(height: 12),
@@ -629,6 +631,225 @@ class _GuidanceRow extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _MemorySection extends StatefulWidget {
+  const _MemorySection({required this.controller});
+
+  final AppController controller;
+
+  @override
+  State<_MemorySection> createState() => _MemorySectionState();
+}
+
+class _MemorySectionState extends State<_MemorySection> {
+  final _tone = TextEditingController();
+  final _style = TextEditingController();
+  final _avoid = TextEditingController();
+  final _note = TextEditingController();
+  bool _loaded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.controller.addListener(_syncFromController);
+    _syncFromController();
+    widget.controller.loadMemory();
+  }
+
+  void _syncFromController() {
+    final c = widget.controller;
+    if (!_loaded || _tone.text != c.preferredTone) {
+      _tone.text = c.preferredTone;
+    }
+    if (!_loaded || _style.text != c.styleNotes) {
+      _style.text = c.styleNotes;
+    }
+    if (!_loaded || _avoid.text != c.avoidNotes) {
+      _avoid.text = c.avoidNotes;
+    }
+    _loaded = true;
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(_syncFromController);
+    _tone.dispose();
+    _style.dispose();
+    _avoid.dispose();
+    _note.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = widget.controller;
+    return ListenableBuilder(
+      listenable: controller,
+      builder: (context, _) {
+        final items = controller.memoryItems;
+        return _SectionSurface(
+          title: '记忆与风格',
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                '完成创作后自动写入摘要；对话任务会注入相关记忆与风格偏好。',
+                style: TextStyle(fontSize: 12, height: 1.45, color: Color(0xFF728096)),
+              ),
+              const SizedBox(height: 14),
+              Row(
+                children: [
+                  const Expanded(
+                    child: Text(
+                      '启用跨会话记忆',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF243447),
+                      ),
+                    ),
+                  ),
+                  Switch(
+                    key: const Key('memory-enabled-switch'),
+                    value: controller.memoryEnabled,
+                    activeThumbColor: Colors.white,
+                    activeTrackColor: QingColors.primaryGreen,
+                    onChanged: (value) =>
+                        controller.savePreferences(memory: value),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                key: const Key('memory-tone-field'),
+                controller: _tone,
+                decoration: const InputDecoration(
+                  labelText: '语气',
+                  hintText: '温和 / 专业 / 活泼',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                key: const Key('memory-style-field'),
+                controller: _style,
+                decoration: const InputDecoration(
+                  labelText: '风格笔记',
+                  hintText: '留白、浅青、低饱和…',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                key: const Key('memory-avoid-field'),
+                controller: _avoid,
+                decoration: const InputDecoration(
+                  labelText: '避免',
+                  hintText: '过密排版、霓虹高饱和…',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Align(
+                alignment: Alignment.centerRight,
+                child: FilledButton(
+                  onPressed: controller.busy
+                      ? null
+                      : () => controller.savePreferences(
+                          tone: _tone.text,
+                          style: _style.text,
+                          avoid: _avoid.text,
+                        ),
+                  child: const Text('保存风格偏好'),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      key: const Key('memory-note-field'),
+                      controller: _note,
+                      decoration: const InputDecoration(
+                        labelText: '手动添加记忆',
+                        border: OutlineInputBorder(),
+                      ),
+                      onChanged: (_) => setState(() {}),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  FilledButton(
+                    onPressed: controller.busy || _note.text.trim().isEmpty
+                        ? null
+                        : () async {
+                            await controller.addMemoryNote(_note.text.trim());
+                            _note.clear();
+                          },
+                    child: const Text('添加'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              if (items.isEmpty)
+                const Text(
+                  '暂无记忆。完成一次创作后会自动出现摘要。',
+                  style: TextStyle(fontSize: 12, color: Color(0xFF9AA6B2)),
+                )
+              else
+                ...items.take(8).map((raw) {
+                  final item = Map<String, dynamic>.from(raw as Map);
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 8),
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFBFCFE),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: QingColors.cardBorder),
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                '${item['kind'] ?? 'note'}',
+                                style: const TextStyle(
+                                  fontSize: 11,
+                                  color: Color(0xFF9AA6B2),
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                item['content']?.toString() ?? '',
+                                style: const TextStyle(
+                                  fontSize: 13,
+                                  height: 1.4,
+                                  color: Color(0xFF243447),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        IconButton(
+                          tooltip: '删除',
+                          onPressed: () => controller.deleteMemoryItem(
+                            item['id'].toString(),
+                          ),
+                          icon: const Icon(Icons.delete_outline, size: 18),
+                        ),
+                      ],
+                    ),
+                  );
+                }),
+            ],
+          ),
+        );
+      },
     );
   }
 }
