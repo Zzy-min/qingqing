@@ -1,6 +1,9 @@
+import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import PageShell from '../components/PageShell'
+import AgentRunComposer from '../components/AgentRunComposer'
 import { useWorkbench } from '../context/WorkbenchContext'
+import { inferCapability } from '../services/qingqingApi'
 
 function StatCard({ label, value, note }) {
   return (
@@ -13,20 +16,30 @@ function StatCard({ label, value, note }) {
 }
 
 const QUICK_TEMPLATES = [
-  { title: '短视频配乐', desc: '输入风格与情绪，快速生成 30 秒配乐', path: '/music' },
-  { title: '产品配音', desc: '一段文案快速合成多音色语音', path: '/voice' },
-  { title: '镜头分镜', desc: '文生视频并附带镜头运动提示', path: '/video' },
-  { title: '海报创作', desc: '提示词 + 风格模板生成视觉主图', path: '/photo' }
+  { title: '短视频配乐', desc: '输入风格与情绪，快速生成 30 秒配乐', path: '/music', capability: 'music' },
+  { title: '产品配音', desc: '一段文案快速合成多音色语音', path: '/voice', capability: 'tts' },
+  { title: '镜头分镜', desc: '文生视频并附带镜头运动提示', path: '/video', capability: 'video' },
+  { title: '海报创作', desc: '提示词 + 风格模板生成视觉主图', path: '/photo', capability: 'image' },
 ]
+
+const CAPABILITY_PATH = {
+  chat: '/chat',
+  image: '/photo',
+  tts: '/voice',
+  music: '/music',
+  video: '/video',
+}
 
 export default function DashboardPage() {
   const navigate = useNavigate()
   const { modules, tokenPlanSummary, usageAnalytics, recentGenerations } = useWorkbench()
+  const [composerGoal, setComposerGoal] = useState('')
+  const inferred = useMemo(() => inferCapability(composerGoal), [composerGoal])
 
   return (
     <PageShell
       title="工作台首页"
-      description="这里是你的创作总览。选择一个能力模块，进入独立页面开始创作。"
+      description="统一创作入口：一句话发起 AgentRun，或进入各能力模块。"
     >
       <section className="stats-grid">
         <StatCard
@@ -41,6 +54,41 @@ export default function DashboardPage() {
         />
         <StatCard label="今日调用次数" value={usageAnalytics.todayCount} note="来自本地行为统计" />
         <StatCard label="本周调用次数" value={usageAnalytics.weekCount} note={`异常 ${usageAnalytics.errorCount} 次`} />
+      </section>
+
+      <section className="mb-6 space-y-3">
+        <div className="card-shell p-4 md:p-5">
+          <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <h3 className="section-title mb-0">快速创作</h3>
+              <p className="mt-1 text-sm text-slate-500">
+                根据描述自动识别能力（当前推断：
+                <strong className="text-teal-700"> {inferred}</strong>
+                ）。也可直接在下方完整 Composer 执行。
+              </p>
+            </div>
+            <button
+              type="button"
+              className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+              onClick={() => navigate(CAPABILITY_PATH[inferred] || '/chat')}
+            >
+              打开 {inferred} 页面
+            </button>
+          </div>
+          <input
+            value={composerGoal}
+            onChange={(e) => setComposerGoal(e.target.value)}
+            placeholder="例如：生成一段清新民谣配乐 / 做一张产品海报…"
+            className="mb-3 w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm outline-none focus:border-teal-500"
+          />
+        </div>
+        <AgentRunComposer
+          key={inferred}
+          capability={inferred}
+          title="Agent 创作 Composer"
+          description="首页统一入口：路由预览、预算审批、SSE 进度与结果展示。"
+          placeholder={composerGoal || '描述你想做的事，支持图 / 音 / 乐 / 视频 / 对话…'}
+        />
       </section>
 
       <section className="module-card-grid">

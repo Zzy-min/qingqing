@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { apiFetch, formatRunMessage, pollAgentRun, setSessionToken } from './qingqingApi'
+import { apiFetch, formatRunMessage, inferCapability, pollAgentRun, setSessionToken, streamAgentRun } from './qingqingApi'
 
 afterEach(() => {
   setSessionToken('')
@@ -42,5 +42,47 @@ describe('qingqing API client', () => {
     expect(run.status).toBe('completed')
     expect(formatRunMessage(run)).toBe('最终答复')
     expect(formatRunMessage({ status: 'failed', error_code: 'provider_execution_failed' })).toMatch(/provider_execution_failed/)
+  })
+
+  it('parses SSE terminal events from the run event stream', async () => {
+    const payload = {
+      type: 'run_completed',
+      status: 'completed',
+      run: {
+        id: 'r2',
+        status: 'completed',
+        invocations: [{ capability: 'chat', output: { content: '流式完成' } }],
+      },
+    }
+    const sse = `event: snapshot\ndata: ${JSON.stringify({ type: 'snapshot', run: { id: 'r2', status: 'running' } })}\n\nevent: delta\ndata: ${JSON.stringify({ type: 'delta', delta: '流' })}\n\nevent: run_completed\ndata: ${JSON.stringify(payload)}\n\n`
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(sse))
+        controller.close()
+      },
+    })
+    const deltas = []
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      body: stream,
+      json: async () => ({}),
+    }))
+    const run = await streamAgentRun('r2', {
+      fetchImpl,
+      onEvent: (event) => {
+        if (event.type === 'delta') deltas.push(event.data.delta)
+      },
+    })
+    expect(run.status).toBe('completed')
+    expect(formatRunMessage(run)).toBe('流式完成')
+    expect(deltas).toEqual(['流'])
+  })
+
+  it('infers capability from natural language goals', () => {
+    expect(inferCapability('做一张海报')).toBe('image')
+    expect(inferCapability('生成配乐')).toBe('music')
+    expect(inferCapability('旁白朗读这段文案')).toBe('tts')
+    expect(inferCapability('15秒短视频')).toBe('video')
+    expect(inferCapability('帮我写一段介绍')).toBe('chat')
   })
 })

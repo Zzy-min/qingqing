@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import ModelSelector from '../components/ModelSelector';
 import { useWorkbench } from '../context/WorkbenchContext';
-import { apiFetch, formatRunMessage, pollAgentRun } from '../services/qingqingApi';
+import { apiFetch, followAgentRun, formatRunMessage } from '../services/qingqingApi';
 
 export default function Chat() {
   const { settings } = useWorkbench();
@@ -16,6 +16,7 @@ export default function Chat() {
   const [input, setInput] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
   const messagesEndRef = useRef(null);
+  const streamBufferRef = useRef('');
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -30,14 +31,20 @@ export default function Chat() {
     });
   };
 
-  const executeAndAwait = async (runId) => {
+  const executeAndFollow = async (runId) => {
     const executeResp = await apiFetch(`/api/v1/agent/runs/${encodeURIComponent(runId)}/execute`, { method: 'POST' });
     if (!executeResp.ok) {
       const failure = await executeResp.json().catch(() => ({}));
       throw new Error(failure.detail || '启动执行失败');
     }
-    patchLastAssistant('任务执行中，正在等待模型结果…');
-    const finished = await pollAgentRun(runId);
+    streamBufferRef.current = '';
+    patchLastAssistant('任务执行中…');
+    const finished = await followAgentRun(runId, {
+      onDelta: (delta) => {
+        streamBufferRef.current += delta;
+        patchLastAssistant(streamBufferRef.current);
+      },
+    });
     return finished;
   };
 
@@ -47,6 +54,7 @@ export default function Chat() {
     setMessages((prev) => [...prev, userMsg, { role: 'assistant', content: '' }]);
     setInput('');
     setIsStreaming(true);
+    streamBufferRef.current = '';
 
     try {
       const routing = {
@@ -84,9 +92,15 @@ export default function Chat() {
       }
       if (run.status === 'planned' || run.status === 'running') {
         const finished = run.status === 'running'
-          ? await pollAgentRun(run.id)
-          : await executeAndAwait(run.id);
-        patchLastAssistant(formatRunMessage(finished));
+          ? await followAgentRun(run.id, {
+            onDelta: (delta) => {
+              streamBufferRef.current += delta;
+              patchLastAssistant(streamBufferRef.current);
+            },
+          })
+          : await executeAndFollow(run.id);
+        const text = streamBufferRef.current || formatRunMessage(finished);
+        patchLastAssistant(text);
         return;
       }
       patchLastAssistant(formatRunMessage(run));
@@ -112,9 +126,10 @@ export default function Chat() {
         setMessages((current) => [...current, { role: 'assistant', content: formatRunMessage({ ...run, status: 'cancelled' }) }]);
         return;
       }
+      streamBufferRef.current = '';
       setMessages((current) => [...current, { role: 'assistant', content: '已确认预算，正在执行…' }]);
-      const finished = await executeAndAwait(run.id);
-      patchLastAssistant(formatRunMessage(finished));
+      const finished = await executeAndFollow(run.id);
+      patchLastAssistant(streamBufferRef.current || formatRunMessage(finished));
     } catch (err) {
       setMessages((current) => [...current, { role: 'assistant', content: `Error: ${err.message}` }]);
     } finally {
@@ -143,7 +158,7 @@ export default function Chat() {
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {messages.length === 0 && (
           <div className="flex items-center justify-center h-full text-gray-500 text-sm">
-            告诉轻青你想创作什么，默认由 Auto 选择合适模型
+            告诉轻青你想创作什么，默认由 Auto 选择合适模型（支持流式输出）
           </div>
         )}
         {messages.map((msg, i) => (

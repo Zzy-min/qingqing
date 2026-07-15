@@ -131,6 +131,48 @@ def test_text_run_executes_and_records_output_without_leaking_provider_errors(cl
     assert persisted["invocations"][0]["output"]["content"] == "创作完成"
 
 
+def test_events_endpoint_returns_snapshot_for_completed_run(client_fixture, monkeypatch):
+    monkeypatch.setenv("QINGQING_ALLOW_LOCAL_USER", "true")
+    from gateway.schemas.chat import ChatChunk
+    class FakeAdapter:
+        async def chat(self, request):
+            yield ChatChunk(model=request.model, delta="ok")
+    monkeypatch.setattr("qingqing_v1.execution.get_adapter", lambda provider: FakeAdapter())
+    run = client_fixture.post(
+        "/api/v1/agent/runs",
+        headers={"Idempotency-Key": "sse-snapshot"},
+        json={"goal": "hi", "routing": {"capability": "chat", "mode": "auto", "credential_preference": "platform_first", "stage_overrides": {}, "budget_limit": 1}},
+    ).json()
+    assert client_fixture.post(f'/api/v1/agent/runs/{run["id"]}/execute').status_code == 202
+    events = client_fixture.get(f'/api/v1/agent/runs/{run["id"]}/events')
+    assert events.status_code == 200
+    body = events.text
+    assert "event: snapshot" in body
+    assert "event: run_completed" in body
+    assert "ok" in body
+
+
+def test_primary_capability_without_chat_stage(client_fixture, monkeypatch):
+    monkeypatch.setenv("QINGQING_ALLOW_LOCAL_USER", "true")
+    class FakeAdapter:
+        async def image(self, request):
+            from gateway.schemas.image import ImageResponse, ImageData
+            return ImageResponse(model=request.model, images=[ImageData(url="https://example.com/a.png")])
+    monkeypatch.setattr("qingqing_v1.execution.get_adapter", lambda provider: FakeAdapter())
+    created = client_fixture.post(
+        "/api/v1/agent/runs",
+        headers={"Idempotency-Key": "image-only"},
+        json={"goal": "a cat", "routing": {"capability": "image", "mode": "auto", "credential_preference": "platform_first", "stage_overrides": {}, "budget_limit": 1}},
+    )
+    assert created.status_code == 201
+    caps = {item["capability"] for item in created.json()["invocations"]}
+    assert caps == {"image"}
+    assert client_fixture.post(f'/api/v1/agent/runs/{created.json()["id"]}/execute').status_code == 202
+    done = client_fixture.get(f'/api/v1/agent/runs/{created.json()["id"]}').json()
+    assert done["status"] == "completed"
+    assert done["invocations"][0]["output"]["images"][0]["url"] == "https://example.com/a.png"
+
+
 def test_media_tool_execution_creates_authorized_artifact(client_fixture, monkeypatch):
     monkeypatch.setenv("QINGQING_ALLOW_LOCAL_USER", "true")
     from gateway.schemas.chat import ChatChunk

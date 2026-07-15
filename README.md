@@ -14,16 +14,18 @@
 | 高阶 BYOK | 加密托管供应商密钥；OpenAI 兼容自定义端点（HTTPS + SSRF 校验） |
 | 多端 | React Web 工作台 + Flutter（Web / Windows / Android） |
 
-### 当前能力边界（Phase 0）
+### 当前能力边界（Phase 0–1）
 
 | 已具备 | 尚未具备（后续阶段） |
 |--------|----------------------|
-| 创建 Run 后**轮询终态**并展示模型输出 | Token 级 SSE 真流式（Phase 1） |
-| 预算超限审批后再执行并取回结果 | 多步 Planner / 创作流水线（Phase 2） |
-| 路由透明（模型、原因、费用区间） | 跨会话记忆 / MCP 工具（Phase 3） |
-| 生产默认仅 `/api/v1` | 耐久 Worker / PostgreSQL（Phase 4） |
+| 创建 Run 后**轮询终态**并展示模型输出 | 多步 Planner / 创作流水线（Phase 2） |
+| **SSE** `GET /api/v1/agent/runs/{id}/events`（delta / step / 终态） | 跨会话记忆 / MCP 工具（Phase 3） |
+| 预算超限审批后再执行并取回结果 | 耐久 Worker / PostgreSQL（Phase 4） |
+| Dashboard Composer + Voice/Music/Video/Photo AI 走 AgentRun | Flutter SSE 对齐（可后续） |
+| 路由透明（模型、原因、费用区间） | |
+| 生产默认仅 `/api/v1` | |
 
-改造蓝图见 `docs/superpowers/specs/` 与会话计划「全面质量提升」。
+改造蓝图见 `docs/superpowers/specs/`。
 
 ## 仓库结构
 
@@ -153,6 +155,7 @@ puro -e stable flutter build windows --release --dart-define=API_BASE_URL=https:
 | GET | `/api/v1/agent/runs` | 任务列表 |
 | POST | `/api/v1/agent/runs/{id}/approve` | 预算审批 |
 | POST | `/api/v1/agent/runs/{id}/execute` | 执行 |
+| GET | `/api/v1/agent/runs/{id}/events` | SSE 进度（snapshot / delta / step / 终态） |
 | GET/POST/… | `/api/v1/credentials` | BYOK 凭据（密钥不回显） |
 | GET/POST/… | `/api/v1/custom-models` | 自定义 OpenAI 兼容端点 |
 | GET | `/api/v1/artifacts` | 作品 / 产物 |

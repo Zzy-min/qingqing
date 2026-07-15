@@ -4,6 +4,7 @@ import HistoryPanel from '../components/HistoryPanel'
 import Toolbar from '../components/Toolbar'
 import PageShell from '../components/PageShell'
 import QuotaPanel from '../components/QuotaPanel'
+import AgentRunComposer from '../components/AgentRunComposer'
 import useEditorStore from '../stores/editorStore'
 import { useWorkbench } from '../context/WorkbenchContext'
 
@@ -136,6 +137,28 @@ export default function PhotoPage() {
           <div className="photo-panel-scroll">
             {photoTab === 'history' ? (
               <HistoryPanel />
+            ) : photoTab === 'ai' ? (
+              <div className="space-y-4">
+                <AgentRunComposer
+                  capability="image"
+                  title="AI 生图（AgentRun）"
+                  description="提示词经轻青 /api/v1 路由与账本；本地滤镜仍使用下方工具。"
+                  placeholder="例如：清新自然风产品主视觉，浅青背景，柔光…"
+                />
+                <details className="rounded-xl border border-slate-200 bg-white p-3 text-sm text-slate-600">
+                  <summary className="cursor-pointer font-medium">高级：本地工具栏（legacy 图处理）</summary>
+                  <div className="mt-3">
+                    <Toolbar
+                      activeTab={photoTab}
+                      originalImage={toolbarImage}
+                      onProcess={handleProcess}
+                      isProcessing={isProcessing}
+                      setIsProcessing={setIsProcessing}
+                      onNotify={pushToast}
+                    />
+                  </div>
+                </details>
+              </div>
             ) : (
               <Toolbar
                 activeTab={photoTab}

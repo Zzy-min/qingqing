@@ -1,4 +1,6 @@
+import asyncio
 import hmac
+import json
 import os
 import re
 import secrets
@@ -12,11 +14,12 @@ from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 from gateway.registry.models import MODEL_REGISTRY
 from .auth import create_session_token, hash_login_code, verify_session_token
+from .events import event_bus
 from .security import decrypt_secret, encrypt_secret, validate_public_https_url
 from .store import store
 from .execution import execute_chat_run, verify_provider_credential
@@ -299,7 +302,8 @@ def create_run(req: RunRequest, identity: Annotated[Identity, Depends(current_id
     limits = entitlement(identity)
     active = [r for r in store.list_runs(identity.user_id) if r["status"] in {"planned", "running", "awaiting_approval"}]
     if len(active) >= limits["concurrent_run_limit"]: raise HTTPException(429, "Concurrent run limit reached")
-    stages = {"chat": req.routing.preferred_model_id, **req.routing.stage_overrides}
+    # Primary stage follows routing.capability; stage_overrides add/replace pipeline steps.
+    stages = {req.routing.capability: req.routing.preferred_model_id, **req.routing.stage_overrides}
     if len(stages) > limits["max_run_steps"]: raise HTTPException(403, "Run step limit exceeded")
     selections = []; total = 0.0
     for capability, preferred in stages.items():
@@ -348,6 +352,72 @@ def get_run(run_id: str, identity: Annotated[Identity, Depends(current_identity)
     run = store.get_run(identity.user_id, run_id)
     if not run: raise HTTPException(404, "Run not found")
     return {**run, "invocations": store.list_invocations(identity.user_id, run_id)}
+
+
+TERMINAL_RUN_STATUSES = {"completed", "failed", "cancelled", "paused"}
+
+
+@router.get("/agent/runs/{run_id}/events")
+async def stream_run_events(run_id: str, identity: Annotated[Identity, Depends(current_identity)]):
+    """Server-Sent Events for live AgentRun progress (delta, steps, terminal)."""
+    run = store.get_run(identity.user_id, run_id)
+    if not run:
+        raise HTTPException(404, "Run not found")
+
+    async def event_stream():
+        def encode(event_type: str, data: dict) -> str:
+            return f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+        snapshot = {**run, "invocations": store.list_invocations(identity.user_id, run_id)}
+        yield encode("snapshot", {"type": "snapshot", "run": snapshot})
+        if snapshot.get("status") in TERMINAL_RUN_STATUSES:
+            terminal = "run_completed" if snapshot["status"] == "completed" else (
+                "run_failed" if snapshot["status"] == "failed" else f"run_{snapshot['status']}"
+            )
+            yield encode(terminal, {"type": terminal, "status": snapshot["status"], "run": snapshot})
+            return
+
+        queue = await event_bus.subscribe(run_id)
+        try:
+            # Re-check in case execution finished between snapshot and subscribe.
+            latest = store.get_run(identity.user_id, run_id)
+            if latest and latest.get("status") in TERMINAL_RUN_STATUSES:
+                full = {**latest, "invocations": store.list_invocations(identity.user_id, run_id)}
+                terminal = "run_completed" if full["status"] == "completed" else (
+                    "run_failed" if full["status"] == "failed" else f"run_{full['status']}"
+                )
+                yield encode(terminal, {"type": terminal, "status": full["status"], "run": full})
+                return
+            while True:
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=15.0)
+                except asyncio.TimeoutError:
+                    current = store.get_run(identity.user_id, run_id)
+                    if current and current.get("status") in TERMINAL_RUN_STATUSES:
+                        full = {**current, "invocations": store.list_invocations(identity.user_id, run_id)}
+                        terminal = "run_completed" if full["status"] == "completed" else (
+                            "run_failed" if full["status"] == "failed" else f"run_{full['status']}"
+                        )
+                        yield encode(terminal, {"type": terminal, "status": full["status"], "run": full})
+                        return
+                    yield encode("ping", {"type": "ping"})
+                    continue
+                event_type = event.get("type", "message")
+                yield encode(event_type, event)
+                if event_type in {"run_completed", "run_failed", "run_paused", "run_cancelled"}:
+                    return
+        finally:
+            await event_bus.unsubscribe(run_id, queue)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post("/agent/runs/{run_id}/execute", status_code=202)
