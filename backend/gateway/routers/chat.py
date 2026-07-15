@@ -54,8 +54,8 @@ async def chat_endpoint(
                 async for chunk in adapter.chat(request_body):
                     yield f"data: {chunk.model_dump_json()}\n\n"
                 yield "data: [DONE]\n\n"
-            except Exception as e:
-                yield f"data: {json.dumps({'error': str(e), 'code': 'provider_error'})}\n\n"
+            except Exception:
+                yield f"data: {json.dumps({'error': 'Provider request failed', 'code': 'provider_error'})}\n\n"
         return StreamingResponse(event_stream(), media_type="text/event-stream")
     else:
         full_content = ""

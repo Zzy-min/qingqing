@@ -33,8 +33,8 @@ async def video_endpoint(request_body: VideoRequest, x_minimax_api_key: str | No
             update_task(task.task_id, status=TaskStatusEnum.PROCESSING)
             result = await adapter.video(request_body)
             update_task(task.task_id, status=TaskStatusEnum.COMPLETED, result=result.model_dump())
-        except Exception as e:
-            update_task(task.task_id, status=TaskStatusEnum.FAILED, error=str(e))
+        except Exception:
+            update_task(task.task_id, status=TaskStatusEnum.FAILED, error="provider_execution_failed")
 
     asyncio.create_task(run())
     return JSONResponse({"success": True, "task": {"task_id": task.task_id, "status": task.status.value}})

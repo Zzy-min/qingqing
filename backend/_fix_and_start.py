@@ -26,7 +26,7 @@ print(f'Port 8000: {r2.stdout.strip() or "FREE"}')
 if not r2.stdout.strip():
     print('Port is free! Starting new server...')
     import os, shutil
-    base = r'C:\Users\Lenovo\projects\minimax-photo-agent\backend'
+    base = r'C:\Users\Lenovo\projects\qingqing\backend'
 
     # Clean pycache
     for root, dirs, files in os.walk(base):
@@ -53,8 +53,8 @@ logging.basicConfig(
 from api.routes import router
 
 app = FastAPI(
-    title="MiniMax Photo Agent API",
-    description="AI-powered photo editing with MiniMax API integration",
+    title="轻青 API",
+    description="轻青个人创作 Agent 与多模态工作台 API",
     version="2.0.0",
 )
 
@@ -94,7 +94,7 @@ if os.path.exists(static_path):
 
 @app.on_event("startup")
 async def startup():
-    logging.getLogger(__name__).info("MiniMax Photo Agent API starting up...")
+    logging.getLogger(__name__).info("轻青 API starting up...")
 
 
 if __name__ == "__main__":

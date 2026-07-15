@@ -1,6 +1,6 @@
 import sys, os
-os.chdir(r"C:\Users\Lenovo\projects\minimax-photo-agent\backend")
-sys.path.insert(0, r"C:\Users\Lenovo\projects\minimax-photo-agent\backend")
+os.chdir(r"C:\Users\Lenovo\projects\qingqing\backend")
+sys.path.insert(0, r"C:\Users\Lenovo\projects\qingqing\backend")
 
 # Force remove any cached modules
 for mod_name in list(sys.modules.keys()):

@@ -42,4 +42,4 @@ async def provider_handler(request: Request, exc: ProviderError):
 
 
 async def generic_handler(request: Request, exc: Exception):
-    return JSONResponse(status_code=500, content={"success": False, "error": {"message": str(exc), "code": "internal_error"}})
+    return JSONResponse(status_code=500, content={"success": False, "error": {"message": "Internal server error", "code": "internal_error"}})

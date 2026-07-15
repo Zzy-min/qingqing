@@ -17,6 +17,10 @@ backend/__pycache__/
 # Environment variables
 .env
 backend/.env
+backend/qingqing.db*
+backend/.test-tmp/
+backend/.coverage
+backend/artifacts/
 
 # Logs
 *.log
@@ -53,3 +57,10 @@ env/
 
 # Dev test files
 backend/test_*.py
+
+# Scratch screenshots / notes (not product assets)
+backend/img*.png
+backend/gateway/img*.png
+backend/gateway/claude.docx
+backend/gateway/claude.md
+backend/手机.md

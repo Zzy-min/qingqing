@@ -21,10 +21,11 @@ class GeminiAdapter(ProviderAdapter):
             role = "user" if m.role == "user" else "model"
             contents.append({"role": role, "parts": [{"text": m.content if isinstance(m.content, str) else str(m.content)}]})
         payload = {"contents": contents, "generationConfig": {"temperature": request.temperature, "maxOutputTokens": request.max_tokens}}
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:streamGenerateContent?alt=sse&key={keys.google_api_key}"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:streamGenerateContent?alt=sse"
+        headers = {"x-goog-api-key": keys.google_api_key}
 
         async with httpx.AsyncClient(timeout=self.request_timeout) as client:
-            async with client.stream("POST", url, json=payload) as resp:
+            async with client.stream("POST", url, headers=headers, json=payload) as resp:
                 resp.raise_for_status()
                 async for line in resp.aiter_lines():
                     if not line.startswith("data: "):
@@ -40,11 +41,12 @@ class GeminiAdapter(ProviderAdapter):
     async def image(self, request: ImageRequest) -> ImageResponse:
         keys = get_keys()
         model_name = request.model.split(":", 1)[1]
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:predict?key={keys.google_api_key}"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:predict"
+        headers = {"x-goog-api-key": keys.google_api_key}
         payload = {"instances": [{"prompt": request.prompt}], "parameters": {"sampleCount": request.n}}
 
         async with httpx.AsyncClient(timeout=120) as client:
-            resp = await client.post(url, json=payload)
+            resp = await client.post(url, headers=headers, json=payload)
             resp.raise_for_status()
             data = resp.json()
 

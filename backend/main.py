@@ -1,5 +1,6 @@
 import os
 import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
@@ -22,11 +23,40 @@ from api.routes import router, get_minimax_service, get_token_plan_service
 from api.routes_tts import router as tts_router, get_tts_service
 from api.routes_music import router as music_router, get_music_service
 from api.routes_video import router as video_router, get_video_service
+from gateway.adapters import discover_adapters
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    logger = logging.getLogger(__name__)
+    logger.info("轻青 API v%s starting up...", APP_VERSION)
+    config = load_minimax_config()
+    log_minimax_bases(logger, config)
+    discover_adapters()
+    try:
+        yield
+    finally:
+        logger.info("Shutting down 轻青 API...")
+        for name, getter in [
+            ("MiniMax", get_minimax_service),
+            ("TokenPlan", get_token_plan_service),
+            ("TTS", get_tts_service),
+            ("Music", get_music_service),
+            ("Video", get_video_service),
+        ]:
+            try:
+                service = await getter()
+                if service is not None and hasattr(service, "close"):
+                    await service.close()
+                    logger.info("%s HTTP client closed.", name)
+            except Exception as exception:
+                logger.warning("Error closing %s service: %s", name, exception)
 
 app = FastAPI(
-    title="MiniMax Photo Agent API",
-    description="MiniMax multimodal workbench API",
+    title="轻青 API",
+    description="轻青个人创作 Agent 与多模态工作台 API",
     version=APP_VERSION,
+    lifespan=lifespan,
 )
 
 MAX_REQUEST_BODY = 20 * 1024 * 1024
@@ -74,13 +104,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(router, prefix="/api")
-app.include_router(tts_router, prefix="/api")
-app.include_router(music_router, prefix="/api")
-app.include_router(video_router, prefix="/api")
+def legacy_api_enabled() -> bool:
+    """Legacy routes bypass the Agent ledger, so expose them only by opt-in."""
+    return (
+        os.environ.get("QINGQING_ALLOW_LOCAL_USER", "false").lower() == "true"
+        and os.environ.get("QINGQING_ENABLE_LEGACY_API", "false").lower() == "true"
+    )
+
+
+LEGACY_API_ENABLED = legacy_api_enabled()
+if LEGACY_API_ENABLED:
+    app.include_router(router, prefix="/api")
+    app.include_router(tts_router, prefix="/api")
+    app.include_router(music_router, prefix="/api")
+    app.include_router(video_router, prefix="/api")
 
 # ── Gateway: Multi-Provider Unified API ──
-from gateway.adapters import discover_adapters
 from gateway.routers import chat as gw_chat, image as gw_image, tts as gw_tts, music as gw_music, video as gw_video, models as gw_models, tasks as gw_tasks
 from gateway.errors import ModelNotFoundError, AuthError, ProviderError
 from gateway.errors import model_not_found_handler, capability_handler, auth_handler, provider_handler, generic_handler
@@ -92,18 +131,22 @@ app.add_exception_handler(AuthError, auth_handler)
 app.add_exception_handler(ProviderError, provider_handler)
 app.add_exception_handler(Exception, generic_handler)
 
-app.include_router(gw_chat.router)
-app.include_router(gw_image.router)
-app.include_router(gw_tts.router)
-app.include_router(gw_music.router)
-app.include_router(gw_video.router)
-app.include_router(gw_models.router)
-app.include_router(gw_tasks.router)
+if LEGACY_API_ENABLED:
+    app.include_router(gw_chat.router)
+    app.include_router(gw_image.router)
+    app.include_router(gw_tts.router)
+    app.include_router(gw_music.router)
+    app.include_router(gw_video.router)
+    app.include_router(gw_models.router)
+    app.include_router(gw_tasks.router)
+from qingqing_v1.router import router as qingqing_v1_router
+app.include_router(qingqing_v1_router)
 
 # TTS output files (local storage to avoid CORS)
 TTS_AUDIO_DIR = get_tts_audio_dir()
 os.makedirs(TTS_AUDIO_DIR, exist_ok=True)
-app.mount("/api/tts/audio", StaticFiles(directory=TTS_AUDIO_DIR), name="tts_audio")
+if LEGACY_API_ENABLED:
+    app.mount("/api/tts/audio", StaticFiles(directory=TTS_AUDIO_DIR), name="tts_audio")
 
 def _resolve_static_path() -> str:
     backend_dir = Path(__file__).resolve().parent
@@ -146,36 +189,6 @@ if static_root.exists():
             return FileResponse(target)
 
         return FileResponse(static_root / "index.html")
-
-
-@app.on_event("startup")
-async def startup():
-    logger = logging.getLogger(__name__)
-    logger.info("MiniMax Photo Agent API v%s starting up...", APP_VERSION)
-    config = load_minimax_config()
-    log_minimax_bases(logger, config)
-    discover_adapters()
-
-
-@app.on_event("shutdown")
-async def shutdown():
-    logger = logging.getLogger(__name__)
-    logger.info("Shutting down MiniMax Photo Agent...")
-    for name, getter in [
-        ("MiniMax", get_minimax_service),
-        ("TokenPlan", get_token_plan_service),
-        ("TTS", get_tts_service),
-        ("Music", get_music_service),
-        ("Video", get_video_service),
-    ]:
-        try:
-            svc = await getter()
-            if svc is not None and hasattr(svc, "close"):
-                await svc.close()
-                logger.info("%s HTTP client closed.", name)
-        except Exception as e:
-            logger.warning("Error closing %s service: %s", name, e)
-
 
 if __name__ == "__main__":
     import uvicorn

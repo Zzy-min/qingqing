@@ -73,7 +73,7 @@ def get_tts_audio_dir() -> str:
     if configured_dir:
         target = Path(configured_dir)
     else:
-        target = Path(tempfile.gettempdir()) / "minimax-photo-agent" / "tts_outputs"
+        target = Path(tempfile.gettempdir()) / "qingqing" / "tts_outputs"
 
     target.mkdir(parents=True, exist_ok=True)
     return str(target)
