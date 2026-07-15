@@ -160,6 +160,15 @@ export function formatRunMessage(run) {
   }
   if (status === 'completed') {
     const invocations = Array.isArray(run.invocations) ? run.invocations : []
+    if (run.plan?.skill_id && invocations.length > 1) {
+      const titles = invocations
+        .filter((item) => item?.status === 'completed')
+        .map((item) => item.title || item.capability)
+      const summary = titles.length ? `多步配方「${run.plan.skill_id}」完成：${titles.join(' → ')}` : `多步任务已完成（${run.id || ''}）`
+      const lastChat = [...invocations].reverse().find((item) => item?.output?.content)
+      if (lastChat?.output?.content) return `${summary}\n\n${lastChat.output.content}`
+      return summary
+    }
     const chat = invocations.find((item) => item?.capability === 'chat' && item?.output?.content)
       || invocations.find((item) => item?.output?.content)
     if (chat?.output?.content) return String(chat.output.content)

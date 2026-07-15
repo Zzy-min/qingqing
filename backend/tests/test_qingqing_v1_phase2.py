@@ -162,7 +162,7 @@ def test_primary_capability_without_chat_stage(client_fixture, monkeypatch):
     created = client_fixture.post(
         "/api/v1/agent/runs",
         headers={"Idempotency-Key": "image-only"},
-        json={"goal": "a cat", "routing": {"capability": "image", "mode": "auto", "credential_preference": "platform_first", "stage_overrides": {}, "budget_limit": 1}},
+        json={"goal": "a cat", "routing": {"capability": "image", "mode": "auto", "credential_preference": "platform_first", "stage_overrides": {}, "budget_limit": 1}, "auto_plan": False},
     )
     assert created.status_code == 201
     caps = {item["capability"] for item in created.json()["invocations"]}
@@ -171,6 +171,104 @@ def test_primary_capability_without_chat_stage(client_fixture, monkeypatch):
     done = client_fixture.get(f'/api/v1/agent/runs/{created.json()["id"]}').json()
     assert done["status"] == "completed"
     assert done["invocations"][0]["output"]["images"][0]["url"] == "https://example.com/a.png"
+
+
+def test_skills_catalog_and_plan_preview(client_fixture):
+    skills = client_fixture.get("/api/v1/skills").json()["skills"]
+    assert any(item["id"] == "short-video-pack" for item in skills)
+    preview = client_fixture.post(
+        "/api/v1/agent/plans/preview",
+        json={
+            "goal": "做一条 15 秒产品短视频素材包：主视觉旁白配乐成片",
+            "routing": {"capability": "chat", "mode": "auto", "credential_preference": "platform_first", "stage_overrides": {}, "budget_limit": 10},
+            "auto_plan": True,
+        },
+    )
+    assert preview.status_code == 200
+    plan = preview.json()["plan"]
+    assert plan["skill_id"] == "short-video-pack"
+    assert len(plan["steps"]) == 4
+    assert {step["capability"] for step in plan["steps"]} == {"image", "tts", "music", "video"}
+
+
+def test_skill_run_executes_multiple_steps_in_order(client_fixture, monkeypatch):
+    monkeypatch.setenv("QINGQING_ALLOW_LOCAL_USER", "true")
+    from gateway.schemas.chat import ChatChunk
+    from gateway.schemas.image import ImageResponse, ImageData
+    from gateway.schemas.music import MusicResponse
+    from gateway.schemas.video import VideoResponse
+
+    class FakeAdapter:
+        async def image(self, request):
+            return ImageResponse(model=request.model, images=[ImageData(url="https://example.com/v.png")])
+
+        async def tts(self, request):
+            return b"voice-bytes"
+
+        async def music(self, request):
+            return MusicResponse(model=request.model, audio_url="https://example.com/m.mp3", duration=15.0)
+
+        async def video(self, request):
+            return VideoResponse(model=request.model, video_url="https://example.com/v.mp4", duration=15.0)
+
+        async def chat(self, request):
+            yield ChatChunk(model=request.model, delta="unused")
+
+    monkeypatch.setattr("qingqing_v1.execution.get_adapter", lambda provider: FakeAdapter())
+    created = client_fixture.post(
+        "/api/v1/agent/runs",
+        headers={"Idempotency-Key": "skill-multi"},
+        json={
+            "goal": "智能水杯 15 秒介绍",
+            "skill_id": "short-video-pack",
+            "routing": {"capability": "video", "mode": "auto", "credential_preference": "platform_first", "stage_overrides": {}, "budget_limit": 10},
+        },
+    )
+    assert created.status_code == 201
+    body = created.json()
+    assert body["plan"]["skill_id"] == "short-video-pack"
+    assert len(body["invocations"]) == 4
+    assert all(item.get("step_id") for item in body["invocations"])
+    assert client_fixture.post(f'/api/v1/agent/runs/{body["id"]}/execute').status_code == 202
+    done = client_fixture.get(f'/api/v1/agent/runs/{body["id"]}').json()
+    assert done["status"] == "completed"
+    assert {item["capability"] for item in done["invocations"] if item["status"] == "completed"} == {"image", "tts", "music", "video"}
+
+
+def test_step_retry_requeues_failed_step(client_fixture, monkeypatch):
+    monkeypatch.setenv("QINGQING_ALLOW_LOCAL_USER", "true")
+    from gateway.schemas.chat import ChatChunk
+    calls = {"n": 0}
+
+    class FlakyAdapter:
+        async def chat(self, request):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("boom")
+            yield ChatChunk(model=request.model, delta="recovered")
+
+    monkeypatch.setattr("qingqing_v1.execution.get_adapter", lambda provider: FlakyAdapter())
+    created = client_fixture.post(
+        "/api/v1/agent/runs",
+        headers={"Idempotency-Key": "step-retry"},
+        json={
+            "goal": "写一句广告",
+            "skill_id": "social-copy",
+            "routing": {"capability": "chat", "mode": "auto", "credential_preference": "platform_first", "stage_overrides": {}, "budget_limit": 1},
+        },
+    ).json()
+    client_fixture.post(f'/api/v1/agent/runs/{created["id"]}/execute')
+    failed = client_fixture.get(f'/api/v1/agent/runs/{created["id"]}').json()
+    assert failed["status"] == "failed"
+    step_id = failed["invocations"][0]["step_id"]
+    retried = client_fixture.post(f'/api/v1/agent/runs/{created["id"]}/steps/{step_id}/retry')
+    assert retried.status_code == 200
+    assert retried.json()["status"] == "planned"
+    assert retried.json()["invocations"][0]["status"] == "reserved"
+    assert client_fixture.post(f'/api/v1/agent/runs/{created["id"]}/execute').status_code == 202
+    done = client_fixture.get(f'/api/v1/agent/runs/{created["id"]}').json()
+    assert done["status"] == "completed"
+    assert done["invocations"][0]["output"]["content"] == "recovered"
 
 
 def test_media_tool_execution_creates_authorized_artifact(client_fixture, monkeypatch):

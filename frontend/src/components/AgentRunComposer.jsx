@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import ModelSelector from './ModelSelector'
 import { useWorkbench } from '../context/WorkbenchContext'
 import { apiFetch, followAgentRun, formatRunMessage } from '../services/qingqingApi'
@@ -12,8 +12,7 @@ const CAPABILITY_LABEL = {
 }
 
 /**
- * Shared AgentRun UI for modality pages and dashboard shortcuts.
- * Creates /api/v1 runs, handles budget approval, follows SSE (with poll fallback).
+ * Shared AgentRun UI: skills, plan preview, multi-step progress, SSE/poll.
  */
 export default function AgentRunComposer({
   capability = 'chat',
@@ -26,6 +25,10 @@ export default function AgentRunComposer({
   const [goal, setGoal] = useState('')
   const [model, setModel] = useState('auto')
   const [budgetLimit, setBudgetLimit] = useState(defaultBudget)
+  const [skillId, setSkillId] = useState('')
+  const [skills, setSkills] = useState([])
+  const [plan, setPlan] = useState(null)
+  const [stepStates, setStepStates] = useState({})
   const [busy, setBusy] = useState(false)
   const [pendingRun, setPendingRun] = useState(null)
   const [statusText, setStatusText] = useState('')
@@ -34,13 +37,57 @@ export default function AgentRunComposer({
   const [routeError, setRouteError] = useState('')
   const [streamBuffer, setStreamBuffer] = useState('')
 
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const resp = await apiFetch('/api/v1/skills')
+        if (!resp.ok) return
+        const data = await resp.json()
+        if (!cancelled) setSkills(data.skills || [])
+      } catch {
+        /* ignore offline */
+      }
+    })()
+    return () => { cancelled = true }
+  }, [])
+
   const buildRouting = () => ({
+    capability,
     mode: model === 'auto' ? 'auto' : 'preferred',
     credential_preference: settings.credentialPreference || 'platform_first',
     preferred_model_id: model === 'auto' ? null : model,
     stage_overrides: {},
     budget_limit: budgetLimit === '' ? null : Number(budgetLimit),
   })
+
+  const previewPlan = async () => {
+    if (!goal.trim()) return
+    setRouteError('')
+    try {
+      const resp = await apiFetch('/api/v1/agent/plans/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          goal: goal.trim(),
+          skill_id: skillId || null,
+          auto_plan: !skillId,
+          routing: buildRouting(),
+        }),
+      })
+      if (!resp.ok) throw new Error((await resp.json().catch(() => ({}))).detail || '计划预览失败')
+      const data = await resp.json()
+      setPlan(data.plan)
+      setStepStates({})
+    } catch (error) {
+      setRouteError(error.message)
+    }
+  }
+
+  const markStep = (stepId, status) => {
+    if (!stepId) return
+    setStepStates((prev) => ({ ...prev, [stepId]: status }))
+  }
 
   const follow = async (runId) => {
     setStreamBuffer('')
@@ -50,8 +97,29 @@ export default function AgentRunComposer({
         setStreamBuffer((prev) => prev + delta)
         setResultText((prev) => (prev || '') + delta)
       },
+      onEvent: (event) => {
+        const data = event.data || {}
+        if (event.type === 'step_started') markStep(data.step_id, 'running')
+        if (event.type === 'step_completed') markStep(data.step_id, 'completed')
+        if (event.type === 'snapshot' && data.run?.invocations) {
+          const next = {}
+          for (const inv of data.run.invocations) {
+            const sid = inv.step_id || inv.id
+            next[sid] = inv.status
+          }
+          setStepStates(next)
+          if (data.run.plan) setPlan(data.run.plan)
+        }
+        if (data.run?.plan) setPlan(data.run.plan)
+      },
     })
     setResultRun(finished)
+    if (finished.plan) setPlan(finished.plan)
+    if (Array.isArray(finished.invocations)) {
+      const next = {}
+      for (const inv of finished.invocations) next[inv.step_id || inv.id] = inv.status
+      setStepStates(next)
+    }
     setResultText((prev) => prev || formatRunMessage(finished))
     setStatusText(finished.status === 'completed' ? '已完成' : `状态：${finished.status}`)
     return finished
@@ -76,23 +144,21 @@ export default function AgentRunComposer({
     setStatusText('创建任务…')
     try {
       const routing = buildRouting()
-      const previewResp = await apiFetch('/api/v1/model-routes/preview', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ capability, ...routing }),
-      })
-      if (!previewResp.ok) {
-        const failure = await previewResp.json().catch(() => ({}))
-        throw new Error(failure.detail || '路由预览失败')
-      }
+      await previewPlan()
       const requestId = typeof crypto?.randomUUID === 'function' ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`
       const resp = await apiFetch('/api/v1/agent/runs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Idempotency-Key': requestId },
-        body: JSON.stringify({ goal: goal.trim(), routing: { ...routing, capability } }),
+        body: JSON.stringify({
+          goal: goal.trim(),
+          skill_id: skillId || null,
+          auto_plan: !skillId,
+          routing,
+        }),
       })
       if (!resp.ok) throw new Error((await resp.json().catch(() => ({}))).detail || '创建任务失败')
       const run = await resp.json()
+      if (run.plan) setPlan(run.plan)
       if (run.status === 'awaiting_approval') {
         setPendingRun(run)
         setStatusText(formatRunMessage(run))
@@ -138,6 +204,26 @@ export default function AgentRunComposer({
     }
   }
 
+  const retryFailedStep = async () => {
+    if (!resultRun || busy) return
+    const failed = (resultRun.invocations || []).find((item) => String(item.status).startsWith('failed') || String(item.status).startsWith('paused'))
+    if (!failed) return
+    const stepId = failed.step_id || failed.id
+    setBusy(true)
+    try {
+      const resp = await apiFetch(`/api/v1/agent/runs/${encodeURIComponent(resultRun.id)}/steps/${encodeURIComponent(stepId)}/retry`, { method: 'POST' })
+      if (!resp.ok) throw new Error((await resp.json().catch(() => ({}))).detail || '步骤重试失败')
+      const run = await resp.json()
+      setResultRun(run)
+      await executeAndFollow(run.id)
+    } catch (error) {
+      setRouteError(error.message)
+      pushToast?.('error', error.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const artifactHint = (() => {
     const inv = resultRun?.invocations?.find((item) => item?.output)
     const out = inv?.output
@@ -150,15 +236,33 @@ export default function AgentRunComposer({
     return null
   })()
 
+  const planSteps = plan?.steps || []
+
   return (
     <div className="card-shell space-y-4 p-4 md:p-6">
       <div>
         <h3 className="text-lg font-semibold text-slate-800">{title || `${CAPABILITY_LABEL[capability] || capability} 创作`}</h3>
         {description ? <p className="mt-1 text-sm text-slate-500">{description}</p> : null}
-        <p className="mt-1 text-xs text-teal-700">经轻青 AgentRun · 路由透明 · 预算可控 · SSE 进度</p>
+        <p className="mt-1 text-xs text-teal-700">AgentRun · Skills 配方 · 多步计划 · SSE 进度</p>
       </div>
 
-      <div className="grid gap-3 md:grid-cols-[1fr_140px_120px]">
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <label className="text-sm text-slate-600 md:col-span-2">
+          创作技能（可选）
+          <select
+            value={skillId}
+            onChange={(e) => setSkillId(e.target.value)}
+            disabled={busy}
+            className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+          >
+            <option value="">Auto 智能规划 / 单能力</option>
+            {skills.map((skill) => (
+              <option key={skill.id} value={skill.id}>
+                {skill.name}（{skill.step_count} 步）
+              </option>
+            ))}
+          </select>
+        </label>
         <ModelSelector capability={capability} value={model} onChange={setModel} />
         <label className="text-sm text-slate-600">
           任务预算
@@ -172,16 +276,6 @@ export default function AgentRunComposer({
             disabled={busy}
           />
         </label>
-        <div className="flex items-end">
-          <button
-            type="button"
-            onClick={createRun}
-            disabled={busy || !goal.trim()}
-            className="w-full rounded-xl bg-teal-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-teal-500 disabled:opacity-50"
-          >
-            {busy ? '处理中…' : '开始创作'}
-          </button>
-        </div>
       </div>
 
       <textarea
@@ -193,8 +287,76 @@ export default function AgentRunComposer({
         className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-teal-500"
       />
 
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={previewPlan}
+          disabled={busy || !goal.trim()}
+          className="rounded-xl border border-slate-200 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+        >
+          预览计划
+        </button>
+        <button
+          type="button"
+          onClick={createRun}
+          disabled={busy || !goal.trim()}
+          className="rounded-xl bg-teal-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-teal-500 disabled:opacity-50"
+        >
+          {busy ? '处理中…' : '开始创作'}
+        </button>
+        {resultRun?.status === 'failed' ? (
+          <button
+            type="button"
+            onClick={retryFailedStep}
+            disabled={busy}
+            className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900 disabled:opacity-50"
+          >
+            重试失败步骤
+          </button>
+        ) : null}
+      </div>
+
       {routeError ? <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{routeError}</div> : null}
       {statusText ? <div className="text-sm text-slate-600">{statusText}</div> : null}
+
+      {planSteps.length > 0 ? (
+        <div className="rounded-xl border border-slate-200 bg-white p-4">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <div className="text-sm font-semibold text-slate-800">
+              执行计划
+              {plan?.skill_id ? <span className="ml-2 text-xs font-normal text-teal-700">skill: {plan.skill_id}</span> : null}
+              {plan?.source ? <span className="ml-2 text-xs font-normal text-slate-400">({plan.source})</span> : null}
+            </div>
+            <div className="text-xs text-slate-500">预估 {plan?.estimated_cost ?? '—'} 额度</div>
+          </div>
+          <ol className="space-y-2">
+            {planSteps.map((step, index) => {
+              const state = stepStates[step.id] || step.status || 'pending'
+              const tone = state === 'completed'
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+                : state === 'running' || state === 'reserved'
+                  ? 'border-sky-200 bg-sky-50 text-sky-900'
+                  : String(state).includes('fail') || String(state).includes('paused')
+                    ? 'border-red-200 bg-red-50 text-red-900'
+                    : 'border-slate-200 bg-slate-50 text-slate-700'
+              return (
+                <li key={step.id || index} className={`rounded-lg border px-3 py-2 text-sm ${tone}`}>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="font-medium">{index + 1}. {step.title || step.capability}</span>
+                    <span className="text-xs uppercase tracking-wide opacity-80">{CAPABILITY_LABEL[step.capability] || step.capability} · {state}</span>
+                  </div>
+                  {step.depends_on?.length ? (
+                    <div className="mt-1 text-xs opacity-70">依赖：{step.depends_on.join(', ')}</div>
+                  ) : null}
+                  {step.model?.display_name ? (
+                    <div className="mt-1 text-xs opacity-70">模型：{step.model.display_name}</div>
+                  ) : null}
+                </li>
+              )
+            })}
+          </ol>
+        </div>
+      ) : null}
 
       {pendingRun ? (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">

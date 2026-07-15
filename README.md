@@ -14,14 +14,15 @@
 | 高阶 BYOK | 加密托管供应商密钥；OpenAI 兼容自定义端点（HTTPS + SSRF 校验） |
 | 多端 | React Web 工作台 + Flutter（Web / Windows / Android） |
 
-### 当前能力边界（Phase 0–1）
+### 当前能力边界（Phase 0–2）
 
 | 已具备 | 尚未具备（后续阶段） |
 |--------|----------------------|
-| 创建 Run 后**轮询终态**并展示模型输出 | 多步 Planner / 创作流水线（Phase 2） |
-| **SSE** `GET /api/v1/agent/runs/{id}/events`（delta / step / 终态） | 跨会话记忆 / MCP 工具（Phase 3） |
-| 预算超限审批后再执行并取回结果 | 耐久 Worker / PostgreSQL（Phase 4） |
-| Dashboard Composer + Voice/Music/Video/Photo AI 走 AgentRun | Flutter SSE 对齐（可后续） |
+| 创建 Run 后**轮询终态**并展示模型输出 | 跨会话记忆 / MCP 工具（Phase 3） |
+| **SSE** `GET /api/v1/agent/runs/{id}/events` | 耐久 Worker / PostgreSQL（Phase 4） |
+| **Planner + Skills** 多步配方与 step retry | Flutter SSE / Skills 对齐 |
+| 预算超限审批后再执行并取回结果 | |
+| Dashboard Composer + 模态页 AgentRun | |
 | 路由透明（模型、原因、费用区间） | |
 | 生产默认仅 `/api/v1` | |
 
@@ -156,6 +157,9 @@ puro -e stable flutter build windows --release --dart-define=API_BASE_URL=https:
 | POST | `/api/v1/agent/runs/{id}/approve` | 预算审批 |
 | POST | `/api/v1/agent/runs/{id}/execute` | 执行 |
 | GET | `/api/v1/agent/runs/{id}/events` | SSE 进度（snapshot / delta / step / 终态） |
+| GET | `/api/v1/skills` | 内置创作 Skills 目录 |
+| POST | `/api/v1/agent/plans/preview` | 预览多步计划（不落库） |
+| POST | `/api/v1/agent/runs/{id}/steps/{step_id}/retry` | 单步重试 |
 | GET/POST/… | `/api/v1/credentials` | BYOK 凭据（密钥不回显） |
 | GET/POST/… | `/api/v1/custom-models` | 自定义 OpenAI 兼容端点 |
 | GET | `/api/v1/artifacts` | 作品 / 产物 |

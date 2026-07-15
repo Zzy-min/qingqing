@@ -20,7 +20,9 @@ from pydantic import BaseModel, Field, field_validator
 from gateway.registry.models import MODEL_REGISTRY
 from .auth import create_session_token, hash_login_code, verify_session_token
 from .events import event_bus
+from .planner import build_plan
 from .security import decrypt_secret, encrypt_secret, validate_public_https_url
+from .skills import get_skill, list_skills
 from .store import store
 from .execution import execute_chat_run, verify_provider_credential
 
@@ -151,6 +153,15 @@ class RunRouting(RouteRequest):
 class RunRequest(BaseModel):
     goal: str = Field(min_length=1, max_length=4000)
     routing: RunRouting
+    skill_id: str | None = Field(None, max_length=80)
+    auto_plan: bool = True
+
+
+class PlanPreviewRequest(BaseModel):
+    goal: str = Field(min_length=1, max_length=4000)
+    routing: RunRouting = Field(default_factory=RunRouting)
+    skill_id: str | None = Field(None, max_length=80)
+    auto_plan: bool = True
 
 
 class CredentialCreate(BaseModel):
@@ -294,39 +305,145 @@ def preview(req: RouteRequest, identity: Annotated[Identity, Depends(current_ide
     return {"selected_model": model, "reason": reason, "ranking": ranking, "estimated_cost": {"min": 0 if model["source"] == "byok" else round(cost * .8, 3), "max": None if model["source"] == "byok" else cost}, "byok_cost_notice": model["source"] == "byok"}
 
 
-@router.post("/agent/runs", status_code=201)
-def create_run(req: RunRequest, identity: Annotated[Identity, Depends(current_identity)], idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None):
-    if idempotency_key:
-        existing = store.get_run_by_idempotency(identity.user_id, idempotency_key)
-        if existing: return existing
+@router.get("/skills")
+def skills_catalog(identity: Annotated[Identity, Depends(current_identity)]):
+    return {"skills": list_skills()}
+
+
+@router.post("/agent/plans/preview")
+def preview_plan(req: PlanPreviewRequest, identity: Annotated[Identity, Depends(current_identity)]):
+    if req.skill_id and not get_skill(req.skill_id):
+        raise HTTPException(404, "Skill not found")
+    plan = build_plan(
+        req.goal,
+        capability=req.routing.capability,
+        skill_id=req.skill_id,
+        auto_plan=req.auto_plan,
+        stage_overrides=req.routing.stage_overrides,
+    )
+    # Attach routed model previews per step without creating a run.
+    routed_steps = []
+    total = 0.0
+    for step in plan["steps"]:
+        preferred = req.routing.stage_overrides.get(step["capability"], req.routing.preferred_model_id if step["capability"] == req.routing.capability else None)
+        stage_request = RouteRequest(
+            **{
+                **req.routing.model_dump(exclude={"stage_overrides"}),
+                "capability": step["capability"],
+                "preferred_model_id": preferred,
+            }
+        )
+        model, reason, ranking = select_route(stage_request, identity)
+        cost = 0 if model["source"] == "byok" else CAPABILITY_COST[step["capability"]]
+        total += cost
+        routed_steps.append({**step, "model": model, "routing_reason": reason, "estimated_cost": cost, "candidate_ranking": ranking})
+    plan = {**plan, "steps": routed_steps, "estimated_cost": round(total, 3)}
+    return {"plan": plan}
+
+
+def _materialize_run_from_plan(req: RunRequest, identity: Identity, idempotency_key: str | None):
+    if req.skill_id and not get_skill(req.skill_id):
+        raise HTTPException(404, "Skill not found")
     limits = entitlement(identity)
     active = [r for r in store.list_runs(identity.user_id) if r["status"] in {"planned", "running", "awaiting_approval"}]
-    if len(active) >= limits["concurrent_run_limit"]: raise HTTPException(429, "Concurrent run limit reached")
-    # Primary stage follows routing.capability; stage_overrides add/replace pipeline steps.
-    stages = {req.routing.capability: req.routing.preferred_model_id, **req.routing.stage_overrides}
-    if len(stages) > limits["max_run_steps"]: raise HTTPException(403, "Run step limit exceeded")
-    selections = []; total = 0.0
-    for capability, preferred in stages.items():
-        if capability not in VALID_CAPABILITIES: raise HTTPException(422, f"Unsupported stage: {capability}")
-        stage_request = RouteRequest(**{**req.routing.model_dump(exclude={"stage_overrides"}), "capability": capability, "preferred_model_id": preferred})
-        model, reason, ranking = select_route(stage_request, identity); cost = 0 if model["source"] == "byok" else CAPABILITY_COST[capability]
-        total += cost; selections.append((capability, model, reason, ranking, cost))
+    if len(active) >= limits["concurrent_run_limit"]:
+        raise HTTPException(429, "Concurrent run limit reached")
+    plan = build_plan(
+        req.goal,
+        capability=req.routing.capability,
+        skill_id=req.skill_id,
+        auto_plan=req.auto_plan,
+        stage_overrides=req.routing.stage_overrides,
+    )
+    if len(plan["steps"]) > limits["max_run_steps"]:
+        raise HTTPException(403, "Run step limit exceeded")
+    selections = []
+    total = 0.0
+    for step in plan["steps"]:
+        if step["capability"] not in VALID_CAPABILITIES:
+            raise HTTPException(422, f"Unsupported stage: {step['capability']}")
+        preferred = req.routing.stage_overrides.get(
+            step["capability"],
+            req.routing.preferred_model_id if step["capability"] == req.routing.capability else None,
+        )
+        stage_request = RouteRequest(
+            **{
+                **req.routing.model_dump(exclude={"stage_overrides"}),
+                "capability": step["capability"],
+                "preferred_model_id": preferred,
+            }
+        )
+        model, reason, ranking = select_route(stage_request, identity)
+        cost = 0 if model["source"] == "byok" else CAPABILITY_COST[step["capability"]]
+        total += cost
+        selections.append((step, model, reason, ranking, cost))
+    plan = {**plan, "estimated_cost": round(total, 3)}
     status = "awaiting_approval" if req.routing.budget_limit is not None and total > req.routing.budget_limit else "planned"
-    rid = str(uuid4()); now = datetime.now(timezone.utc).isoformat()
-    run = {"id": rid, "goal": req.goal, "status": status, "idempotency_key": idempotency_key, "routing_snapshot": req.routing.model_dump(), "estimated_cost": round(total, 3), "created_at": now}
+    rid = str(uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+    run = {
+        "id": rid,
+        "goal": req.goal,
+        "status": status,
+        "idempotency_key": idempotency_key,
+        "routing_snapshot": req.routing.model_dump(),
+        "skill_id": plan.get("skill_id"),
+        "plan": plan,
+        "estimated_cost": round(total, 3),
+        "created_at": now,
+    }
     ledger = store.list_ledger(identity.user_id)
-    used = sum(entry["amount"] for entry in ledger if entry["type"] in {"reserved", "charged"}) - sum(entry["amount"] for entry in ledger if entry["type"] == "released")
+    used = sum(entry["amount"] for entry in ledger if entry["type"] in {"reserved", "charged"}) - sum(
+        entry["amount"] for entry in ledger if entry["type"] == "released"
+    )
     if used + total > limits["monthly_credit_limit"]:
         raise HTTPException(402, "Monthly credit limit exceeded")
     if not store.create_run_once(identity.user_id, run):
         winner = store.get_run_by_idempotency(identity.user_id, idempotency_key)
-        if winner: return {**winner, "invocations": store.list_invocations(identity.user_id, winner["id"])}
+        if winner:
+            return {**winner, "invocations": store.list_invocations(identity.user_id, winner["id"])}
         raise HTTPException(409, "Run idempotency conflict")
-    for capability, model, reason, ranking, cost in selections:
-        store.save_invocation(identity.user_id, {"id": str(uuid4()), "run_id": rid, "capability": capability, "model": model, "routing_reason": reason, "candidate_ranking": ranking, "estimated_cost": cost, "credential_source": model["source"], "status": "reserved" if status == "planned" else "awaiting_approval", "created_at": now})
+    for step, model, reason, ranking, cost in selections:
+        store.save_invocation(
+            identity.user_id,
+            {
+                "id": str(uuid4()),
+                "run_id": rid,
+                "step_id": step["id"],
+                "title": step.get("title"),
+                "depends_on": list(step.get("depends_on") or []),
+                "prompt": step.get("prompt") or req.goal,
+                "capability": step["capability"],
+                "model": model,
+                "routing_reason": reason,
+                "candidate_ranking": ranking,
+                "estimated_cost": cost,
+                "credential_source": model["source"],
+                "status": "reserved" if status == "planned" else "awaiting_approval",
+                "created_at": now,
+            },
+        )
     if total > 0:
-        store.save_ledger(identity.user_id, {"id": str(uuid4()), "run_id": rid, "type": "reservation_pending" if status == "awaiting_approval" else "reserved", "amount": round(total, 3), "created_at": now})
+        store.save_ledger(
+            identity.user_id,
+            {
+                "id": str(uuid4()),
+                "run_id": rid,
+                "type": "reservation_pending" if status == "awaiting_approval" else "reserved",
+                "amount": round(total, 3),
+                "created_at": now,
+            },
+        )
     return {**run, "invocations": store.list_invocations(identity.user_id, rid)}
+
+
+@router.post("/agent/runs", status_code=201)
+def create_run(req: RunRequest, identity: Annotated[Identity, Depends(current_identity)], idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None):
+    if idempotency_key:
+        existing = store.get_run_by_idempotency(identity.user_id, idempotency_key)
+        if existing:
+            return existing
+    return _materialize_run_from_plan(req, identity, idempotency_key)
 
 
 @router.get("/agent/runs")
@@ -468,11 +585,43 @@ def retry_run(run_id: str, identity: Annotated[Identity, Depends(current_identit
     if run["status"] != "failed": raise HTTPException(409, "Only failed runs can be retried")
     for invocation in store.list_invocations(identity.user_id, run_id):
         if invocation["status"] == "failed":
-            cleaned = {k: v for k, v in invocation.items() if k not in {"error_code", "failed_at"}}
+            cleaned = {k: v for k, v in invocation.items() if k not in {"error_code", "failed_at", "output", "resolved_prompt"}}
             store.save_invocation(identity.user_id, {**cleaned, "status": "reserved"})
     retried = {k: v for k, v in run.items() if k not in {"error_code", "failed_at"}}
     retried = {**retried, "status": "planned", "retry_count": int(run.get("retry_count", 0)) + 1, "updated_at": datetime.now(timezone.utc).isoformat()}
     store.save_run(identity.user_id, retried); return retried
+
+
+@router.post("/agent/runs/{run_id}/steps/{step_id}/retry")
+def retry_step(run_id: str, step_id: str, identity: Annotated[Identity, Depends(current_identity)]):
+    """Re-queue a single failed step and reset the run to planned for re-execution."""
+    run = store.get_run(identity.user_id, run_id)
+    if not run:
+        raise HTTPException(404, "Run not found")
+    if run["status"] not in {"failed", "paused"}:
+        raise HTTPException(409, "Only failed or paused runs support step retry")
+    target = None
+    for invocation in store.list_invocations(identity.user_id, run_id):
+        key = invocation.get("step_id") or invocation["id"]
+        if key == step_id or invocation["id"] == step_id:
+            target = invocation
+            break
+    if not target:
+        raise HTTPException(404, "Step not found")
+    if target["status"] not in {"failed", "paused_entitlement_changed", "paused_credential_unavailable", "blocked_credential_deleted"}:
+        raise HTTPException(409, "Step is not retryable")
+    cleaned = {k: v for k, v in target.items() if k not in {"error_code", "failed_at", "output", "resolved_prompt", "pause_reason"}}
+    store.save_invocation(identity.user_id, {**cleaned, "status": "reserved"})
+    # Leave completed siblings as completed; executor skips them.
+    retried = {k: v for k, v in run.items() if k not in {"error_code", "failed_at", "pause_reason"}}
+    retried = {
+        **retried,
+        "status": "planned",
+        "retry_count": int(run.get("retry_count", 0)) + 1,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    store.save_run(identity.user_id, retried)
+    return {**retried, "invocations": store.list_invocations(identity.user_id, run_id)}
 
 
 @router.get("/billing/ledger")

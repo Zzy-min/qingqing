@@ -11,6 +11,7 @@ from gateway.schemas.music import MusicRequest
 from gateway.schemas.tts import TTSRequest
 from gateway.schemas.video import VideoRequest
 from .events import event_bus
+from .planner import resolve_step_prompt, topological_invocation_order
 from .security import decrypt_secret, validate_public_https_url
 from .store import store
 
@@ -23,11 +24,15 @@ async def execute_chat_run(user_id: str, run_id: str):
     run = store.get_run(user_id, run_id)
     if not run or run["status"] != "running":
         return
-    invocations = store.list_invocations(user_id, run_id)
+    invocations = topological_invocation_order(store.list_invocations(user_id, run_id))
+    completed: dict[str, dict] = {}
     try:
-        await _emit(run_id, "run_started", status="running")
+        await _emit(run_id, "run_started", status="running", plan=run.get("plan"))
         for invocation in invocations:
             if invocation["status"] not in {"reserved", "running"}:
+                if invocation["status"] == "completed":
+                    step_key = invocation.get("step_id") or invocation["id"]
+                    completed[step_key] = invocation
                 continue
             model = invocation["model"]
             user = store.get_user(user_id)
@@ -42,20 +47,28 @@ async def execute_chat_run(user_id: str, run_id: str):
                 return
             invocation = {**invocation, "status": "running"}
             store.save_invocation(user_id, invocation)
+            step_key = invocation.get("step_id") or invocation["id"]
             await _emit(
                 run_id,
                 "step_started",
                 invocation_id=invocation["id"],
+                step_id=step_key,
                 capability=invocation["capability"],
+                title=invocation.get("title"),
                 model=model,
             )
-            output = await _execute_capability(user_id, run_id, run["goal"], invocation)
-            store.save_invocation(user_id, {**invocation, "status": "completed", "output": output, "completed_at": _now()})
+            step_goal = resolve_step_prompt(invocation, completed, run.get("goal") or "")
+            output = await _execute_capability(user_id, run_id, step_goal, invocation)
+            done = {**invocation, "status": "completed", "output": output, "completed_at": _now(), "resolved_prompt": step_goal}
+            store.save_invocation(user_id, done)
+            completed[step_key] = done
             await _emit(
                 run_id,
                 "step_completed",
                 invocation_id=invocation["id"],
+                step_id=step_key,
                 capability=invocation["capability"],
+                title=invocation.get("title"),
                 output=output,
             )
         store.save_run(user_id, {**run, "status": "completed", "completed_at": _now()})
@@ -73,7 +86,15 @@ async def execute_chat_run(user_id: str, run_id: str):
     except Exception:
         for invocation in store.list_invocations(user_id, run_id):
             if invocation["status"] == "running":
-                store.save_invocation(user_id, {**invocation, "status": "failed", "error_code": "provider_execution_failed", "failed_at": _now()})
+                store.save_invocation(
+                    user_id,
+                    {
+                        **invocation,
+                        "status": "failed",
+                        "error_code": "provider_execution_failed",
+                        "failed_at": _now(),
+                    },
+                )
         store.save_run(user_id, {**run, "status": "failed", "error_code": "provider_execution_failed", "failed_at": _now()})
         final = store.get_run(user_id, run_id)
         await _emit(
