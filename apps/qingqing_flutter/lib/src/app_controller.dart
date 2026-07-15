@@ -257,12 +257,13 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> _pollRun(String runId) async {
-    if ((!authenticated && api.token == null) || !_pollingRunIds.add(runId)) {
+    // Allow local-loopback runs without a session token; stop only when a
+    // second poller is already active for the same id.
+    if (!_pollingRunIds.add(runId)) {
       return;
     }
     try {
       for (var attempt = 0; attempt < 30; attempt++) {
-        if (!authenticated && api.token == null) return;
         await Future<void>.delayed(
           Duration(
             milliseconds: attempt < 2 ? 500 : (attempt < 8 ? 1500 : 4000),

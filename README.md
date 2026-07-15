@@ -14,6 +14,17 @@
 | 高阶 BYOK | 加密托管供应商密钥；OpenAI 兼容自定义端点（HTTPS + SSRF 校验） |
 | 多端 | React Web 工作台 + Flutter（Web / Windows / Android） |
 
+### 当前能力边界（Phase 0）
+
+| 已具备 | 尚未具备（后续阶段） |
+|--------|----------------------|
+| 创建 Run 后**轮询终态**并展示模型输出 | Token 级 SSE 真流式（Phase 1） |
+| 预算超限审批后再执行并取回结果 | 多步 Planner / 创作流水线（Phase 2） |
+| 路由透明（模型、原因、费用区间） | 跨会话记忆 / MCP 工具（Phase 3） |
+| 生产默认仅 `/api/v1` | 耐久 Worker / PostgreSQL（Phase 4） |
+
+改造蓝图见 `docs/superpowers/specs/` 与会话计划「全面质量提升」。
+
 ## 仓库结构
 
 ```

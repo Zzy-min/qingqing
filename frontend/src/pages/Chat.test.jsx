@@ -35,6 +35,17 @@ describe('Chat routing controls', () => {
       if (String(url).includes('/models')) return { ok: true, json: async () => ({ models: [] }) }
       if (String(url).includes('preview')) return { ok: true, json: async () => ({ selected_model: { display_name: 'Auto' }, reason: 'balanced', estimated_cost: { min: 0.8, max: 1 } }) }
       if (String(url).includes('/approve')) return { ok: true, json: async () => ({ id: 'run-1', status: 'planned' }) }
+      if (String(url).includes('/execute')) return { ok: true, json: async () => ({ id: 'run-1', status: 'running' }) }
+      if (String(url).includes('/agent/runs/run-1') && !String(url).includes('/execute') && !String(url).includes('/approve')) {
+        return {
+          ok: true,
+          json: async () => ({
+            id: 'run-1',
+            status: 'completed',
+            invocations: [{ capability: 'chat', output: { content: '预算确认后的最终回复' }, status: 'completed' }],
+          }),
+        }
+      }
       return { ok: true, json: async () => ({ id: 'run-1', status: 'awaiting_approval', estimated_cost: 1 }) }
     }))
     render(<Chat />)
@@ -44,6 +55,43 @@ describe('Chat routing controls', () => {
     const runCall = fetch.mock.calls.find(([url]) => String(url).endsWith('/agent/runs'))
     expect(runCall[1].headers.get('Idempotency-Key')).toBe('request-1')
     await userEvent.click(screen.getByRole('button', { name: '确认执行' }))
-    await screen.findByText(/已确认预算/)
+    await waitFor(() => expect(screen.getByText('预算确认后的最终回复')).toBeInTheDocument())
+  })
+
+  it('polls a planned run until the model output is available', async () => {
+    Element.prototype.scrollIntoView = vi.fn()
+    vi.stubGlobal('crypto', { randomUUID: () => 'request-2' })
+    let pollCount = 0
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      const path = String(url)
+      if (path.includes('/models')) return { ok: true, json: async () => ({ models: [] }) }
+      if (path.includes('preview')) {
+        return { ok: true, json: async () => ({ selected_model: { display_name: 'Auto' }, reason: 'balanced', estimated_cost: { min: 0.01, max: 0.02 } }) }
+      }
+      if (path.endsWith('/agent/runs') && !path.includes('run-2')) {
+        return { ok: true, json: async () => ({ id: 'run-2', status: 'planned', estimated_cost: 0.02 }) }
+      }
+      if (path.includes('/execute')) return { ok: true, json: async () => ({ id: 'run-2', status: 'running' }) }
+      if (path.includes('/agent/runs/run-2')) {
+        pollCount += 1
+        if (pollCount < 2) {
+          return { ok: true, json: async () => ({ id: 'run-2', status: 'running', invocations: [] }) }
+        }
+        return {
+          ok: true,
+          json: async () => ({
+            id: 'run-2',
+            status: 'completed',
+            invocations: [{ capability: 'chat', status: 'completed', output: { content: '你好，这是模型的真实回复' } }],
+          }),
+        }
+      }
+      return { ok: false, json: async () => ({ detail: 'unexpected' }) }
+    }))
+    render(<Chat />)
+    await userEvent.type(screen.getByPlaceholderText(/输入消息/), '你好')
+    await userEvent.click(screen.getByRole('button', { name: '发送' }))
+    await waitFor(() => expect(screen.getByText('你好，这是模型的真实回复')).toBeInTheDocument(), { timeout: 5000 })
+    expect(pollCount).toBeGreaterThanOrEqual(2)
   })
 })

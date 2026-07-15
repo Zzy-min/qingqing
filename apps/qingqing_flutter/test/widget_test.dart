@@ -13,6 +13,8 @@ import 'package:qingqing/src/pages/settings_page.dart';
 import 'package:qingqing/src/qingqing_app.dart';
 
 class _AgentApi extends ApiClient {
+  int _runPolls = 0;
+
   @override
   Future<Map<String, dynamic>> request(
     String path, {
@@ -23,7 +25,7 @@ class _AgentApi extends ApiClient {
     if (path.startsWith('/api/v1/models')) {
       return {'models': <dynamic>[]};
     }
-    if (path == '/api/v1/agent/runs') {
+    if (path == '/api/v1/agent/runs' && method == 'POST') {
       return {
         'id': 'run-1',
         'status': 'awaiting_approval',
@@ -36,9 +38,43 @@ class _AgentApi extends ApiClient {
         ],
       };
     }
+    if (path == '/api/v1/agent/runs' && method == 'GET') {
+      return {'runs': <dynamic>[]};
+    }
     if (path.endsWith('/approve')) return {'id': 'run-1', 'status': 'planned'};
     if (path.endsWith('/execute')) return {'id': 'run-1', 'status': 'running'};
     if (path.endsWith('/cancel')) return {'id': 'run-1', 'status': 'cancelled'};
+    if (path == '/api/v1/agent/runs/run-1') {
+      _runPolls += 1;
+      if (_runPolls < 2) {
+        return {
+          'id': 'run-1',
+          'status': 'running',
+          'invocations': [
+            {
+              'model': {'display_name': '通用创作模型', 'provider': 'provider'},
+              'routing_reason': '质量与成本平衡',
+            },
+          ],
+        };
+      }
+      return {
+        'id': 'run-1',
+        'status': 'completed',
+        'invocations': [
+          {
+            'capability': 'chat',
+            'model': {'display_name': '通用创作模型', 'provider': 'provider'},
+            'routing_reason': '质量与成本平衡',
+            'output': {'content': '这是模型完成后的真实输出'},
+          },
+        ],
+      };
+    }
+    if (path == '/api/v1/artifacts') return {'artifacts': <dynamic>[]};
+    if (path == '/api/v1/me/entitlements') {
+      return {'plan': 'free', 'monthly_credit_limit': 100};
+    }
     return <String, dynamic>{};
   }
 }
@@ -217,8 +253,14 @@ void main() {
     expect(find.textContaining('通用创作模型'), findsOneWidget);
     expect(find.text('批准并执行'), findsOneWidget);
     await tester.tap(find.text('批准并执行'));
-    await tester.pumpAndSettle();
-    expect(find.textContaining('running'), findsOneWidget);
+    await tester.pump();
+    // Polling uses delayed futures; advance until completed output appears.
+    for (var i = 0; i < 20; i++) {
+      await tester.pump(const Duration(milliseconds: 500));
+      if (find.text('这是模型完成后的真实输出').evaluate().isNotEmpty) break;
+    }
+    expect(find.text('这是模型完成后的真实输出'), findsOneWidget);
+    expect(find.textContaining('已完成'), findsOneWidget);
   });
 
   testWidgets('refactored desktop shell fits a 1024 by 768 viewport', (

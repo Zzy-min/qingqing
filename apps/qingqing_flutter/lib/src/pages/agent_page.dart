@@ -20,10 +20,22 @@ class _AgentPageState extends State<AgentPage> {
   String model = 'auto';
   Map<String, dynamic>? run;
   bool loading = false;
+
   @override
   void initState() {
     super.initState();
+    widget.controller.addListener(_onControllerChanged);
     _loadModels();
+  }
+
+  void _onControllerChanged() {
+    final runId = run?['id']?.toString();
+    if (runId == null || !mounted) return;
+    final updated = widget.controller.activeRuns
+        .where((item) => item['id'] == runId)
+        .firstOrNull;
+    if (updated == null) return;
+    setState(() => run = Map<String, dynamic>.from(updated));
   }
 
   Future<void> _loadModels() async {
@@ -54,7 +66,7 @@ class _AgentPageState extends State<AgentPage> {
     );
     if (!mounted) return;
     setState(() {
-      run = data;
+      run = data == null ? null : Map<String, dynamic>.from(data);
       loading = false;
     });
     if (data == null) {
@@ -67,14 +79,20 @@ class _AgentPageState extends State<AgentPage> {
   Future<void> _approve() async {
     final runId = run?['id']?.toString();
     if (runId == null) return;
+    setState(() => loading = true);
     await widget.controller.approveRun(runId);
+    if (!mounted) return;
+    setState(() => loading = false);
     _syncRun(runId);
   }
 
   Future<void> _cancel() async {
     final runId = run?['id']?.toString();
     if (runId == null) return;
+    setState(() => loading = true);
     await widget.controller.cancelRun(runId);
+    if (!mounted) return;
+    setState(() => loading = false);
     _syncRun(runId);
   }
 
@@ -88,8 +106,27 @@ class _AgentPageState extends State<AgentPage> {
     }
   }
 
+  String? _extractOutput(Map<String, dynamic> value) {
+    final invocations = value['invocations'] as List<dynamic>? ?? const [];
+    for (final raw in invocations) {
+      if (raw is! Map) continue;
+      final output = raw['output'];
+      if (output is Map && output['content'] != null) {
+        return output['content'].toString();
+      }
+      if (output is Map && output['url'] != null) {
+        return '产物链接：${output['url']}';
+      }
+      if (output is Map && output['artifact_id'] != null) {
+        return '作品 ID：${output['artifact_id']}';
+      }
+    }
+    return null;
+  }
+
   @override
   void dispose() {
+    widget.controller.removeListener(_onControllerChanged);
     goal.dispose();
     budget.dispose();
     super.dispose();
@@ -105,7 +142,7 @@ class _AgentPageState extends State<AgentPage> {
           widget.capability == 'image' ? '轻青图片创作' : '轻青创作 Agent',
           style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w700),
         ),
-        const Text('描述目标，Auto 会平衡质量、成本与速度。'),
+        const Text('描述目标，Auto 会平衡质量、成本与速度。完成后会展示真实模型输出。'),
         const SizedBox(height: 20),
         Row(
           children: [
@@ -168,7 +205,7 @@ class _AgentPageState extends State<AgentPage> {
         FilledButton.icon(
           onPressed: loading ? null : _create,
           icon: const Icon(Icons.auto_awesome),
-          label: Text(loading ? '创建中…' : '开始创作'),
+          label: Text(loading ? '处理中…' : '开始创作'),
         ),
       ],
     ),
@@ -181,17 +218,24 @@ class _AgentPageState extends State<AgentPage> {
         : invocations.first as Map<String, dynamic>;
     final selectedModel = invocation?['model'] as Map<String, dynamic>?;
     final status = value['status']?.toString() ?? 'unknown';
+    final output = _extractOutput(value);
+    final statusLine = switch (status) {
+      'awaiting_approval' =>
+        '预计消耗 ${value['estimated_cost']} 额度，需要确认后执行。',
+      'running' || 'planned' => '任务 ${value['id']} 执行中…',
+      'completed' => '任务 ${value['id']} 已完成。',
+      'failed' => '任务失败：${value['error_code'] ?? '未知错误'}',
+      'paused' => '任务已暂停：${value['pause_reason'] ?? value['error_code'] ?? ''}',
+      'cancelled' => '任务已取消。',
+      _ => '任务 ${value['id']} 已进入 $status 状态。',
+    };
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              status == 'awaiting_approval'
-                  ? '预计消耗 ${value['estimated_cost']} 额度，需要确认后执行。'
-                  : '任务 ${value['id']} 已进入 $status 状态。',
-            ),
+            Text(statusLine),
             if (selectedModel != null) ...[
               const SizedBox(height: 8),
               Text(
@@ -200,14 +244,23 @@ class _AgentPageState extends State<AgentPage> {
               ),
               Text(invocation?['routing_reason']?.toString() ?? 'Auto 路由'),
             ],
+            if (output != null && output.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              const Text('输出', style: TextStyle(fontWeight: FontWeight.w600)),
+              const SizedBox(height: 4),
+              SelectableText(output),
+            ],
             if (status == 'awaiting_approval') ...[
               const SizedBox(height: 12),
               Row(
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
-                  TextButton(onPressed: _cancel, child: const Text('取消任务')),
+                  TextButton(onPressed: loading ? null : _cancel, child: const Text('取消任务')),
                   const SizedBox(width: 8),
-                  FilledButton(onPressed: _approve, child: const Text('批准并执行')),
+                  FilledButton(
+                    onPressed: loading ? null : _approve,
+                    child: const Text('批准并执行'),
+                  ),
                 ],
               ),
             ],

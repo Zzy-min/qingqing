@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import ModelSelector from '../components/ModelSelector';
 import { useWorkbench } from '../context/WorkbenchContext';
-import { apiFetch } from '../services/qingqingApi';
+import { apiFetch, formatRunMessage, pollAgentRun } from '../services/qingqingApi';
 
 export default function Chat() {
   const { settings } = useWorkbench();
@@ -21,16 +21,41 @@ export default function Chat() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  const patchLastAssistant = (content) => {
+    setMessages((prev) => {
+      const updated = [...prev];
+      if (updated.length === 0) return [{ role: 'assistant', content }];
+      updated[updated.length - 1] = { role: 'assistant', content };
+      return updated;
+    });
+  };
+
+  const executeAndAwait = async (runId) => {
+    const executeResp = await apiFetch(`/api/v1/agent/runs/${encodeURIComponent(runId)}/execute`, { method: 'POST' });
+    if (!executeResp.ok) {
+      const failure = await executeResp.json().catch(() => ({}));
+      throw new Error(failure.detail || '启动执行失败');
+    }
+    patchLastAssistant('任务执行中，正在等待模型结果…');
+    const finished = await pollAgentRun(runId);
+    return finished;
+  };
+
   const handleSend = async () => {
     if (!input.trim() || isStreaming) return;
     const userMsg = { role: 'user', content: input.trim() };
-    const newMessages = [...messages, userMsg, { role: 'assistant', content: '' }];
-    setMessages(newMessages);
+    setMessages((prev) => [...prev, userMsg, { role: 'assistant', content: '' }]);
     setInput('');
     setIsStreaming(true);
 
     try {
-      const routing = { mode: model === 'auto' ? 'auto' : 'preferred', credential_preference: settings.credentialPreference || 'platform_first', preferred_model_id: model === 'auto' ? null : model, stage_overrides: stageOverrides, budget_limit: budgetLimit === '' ? null : Number(budgetLimit) };
+      const routing = {
+        mode: model === 'auto' ? 'auto' : 'preferred',
+        credential_preference: settings.credentialPreference || 'platform_first',
+        preferred_model_id: model === 'auto' ? null : model,
+        stage_overrides: stageOverrides,
+        budget_limit: budgetLimit === '' ? null : Number(budgetLimit),
+      };
       setRouteError('');
       const previewResp = await apiFetch('/api/v1/model-routes/preview', {
         method: 'POST',
@@ -45,32 +70,56 @@ export default function Chat() {
       const preview = await previewResp.json();
       setRouteInfo(preview?.data || preview);
       const requestId = typeof crypto?.randomUUID === 'function' ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
-      const resp = await apiFetch('/api/v1/agent/runs', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': requestId }, body: JSON.stringify({ goal: userMsg.content, routing }) });
+      const resp = await apiFetch('/api/v1/agent/runs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': requestId },
+        body: JSON.stringify({ goal: userMsg.content, routing }),
+      });
       if (!resp.ok) throw new Error((await resp.json().catch(() => ({}))).detail || '创建任务失败');
       const run = await resp.json();
-      if (run.status === 'awaiting_approval') setPendingRun(run);
-      if (run.status === 'planned') await apiFetch(`/api/v1/agent/runs/${encodeURIComponent(run.id)}/execute`, { method: 'POST' });
-      const content = run.status === 'awaiting_approval' ? `任务预计消耗 ${run.estimated_cost} 额度，超过你的预算，需要确认后继续。` : (run.message || run.summary || `任务已开始执行（${run.id || run.run_id || '处理中'}）`);
-      setMessages(prev => { const updated = [...prev]; updated[updated.length - 1] = { role: 'assistant', content }; return updated; });
+      if (run.status === 'awaiting_approval') {
+        setPendingRun(run);
+        patchLastAssistant(formatRunMessage(run));
+        return;
+      }
+      if (run.status === 'planned' || run.status === 'running') {
+        const finished = run.status === 'running'
+          ? await pollAgentRun(run.id)
+          : await executeAndAwait(run.id);
+        patchLastAssistant(formatRunMessage(finished));
+        return;
+      }
+      patchLastAssistant(formatRunMessage(run));
     } catch (err) {
-      setMessages(prev => {
-        const updated = [...prev];
-        updated[updated.length - 1] = { role: 'assistant', content: `Error: ${err.message}` };
-        return updated;
-      });
+      patchLastAssistant(`Error: ${err.message}`);
     } finally {
       setIsStreaming(false);
     }
   };
 
   const resolveApproval = async (action) => {
-    if (!pendingRun) return;
-    const response = await apiFetch(`/api/v1/agent/runs/${encodeURIComponent(pendingRun.id)}/${action}`, { method: 'POST' });
-    if (!response.ok) return setRouteError(action === 'approve' ? '任务确认失败，请重试' : '取消任务失败，请重试');
-    const run = await response.json();
-    if (action === 'approve') await apiFetch(`/api/v1/agent/runs/${encodeURIComponent(run.id)}/execute`, { method: 'POST' });
-    setPendingRun(null);
-    setMessages((current) => [...current, { role: 'assistant', content: action === 'approve' ? `已确认预算，任务 ${run.id} 等待执行。` : `任务 ${run.id} 已取消。` }]);
+    if (!pendingRun || isStreaming) return;
+    setIsStreaming(true);
+    try {
+      const response = await apiFetch(`/api/v1/agent/runs/${encodeURIComponent(pendingRun.id)}/${action}`, { method: 'POST' });
+      if (!response.ok) {
+        setRouteError(action === 'approve' ? '任务确认失败，请重试' : '取消任务失败，请重试');
+        return;
+      }
+      const run = await response.json();
+      setPendingRun(null);
+      if (action === 'cancel') {
+        setMessages((current) => [...current, { role: 'assistant', content: formatRunMessage({ ...run, status: 'cancelled' }) }]);
+        return;
+      }
+      setMessages((current) => [...current, { role: 'assistant', content: '已确认预算，正在执行…' }]);
+      const finished = await executeAndAwait(run.id);
+      patchLastAssistant(formatRunMessage(finished));
+    } catch (err) {
+      setMessages((current) => [...current, { role: 'assistant', content: `Error: ${err.message}` }]);
+    } finally {
+      setIsStreaming(false);
+    }
   };
 
   return (
@@ -89,7 +138,7 @@ export default function Chat() {
       </div>}
       {pendingRun && <div className="flex items-center justify-between gap-4 border-b border-amber-700 bg-amber-950 px-4 py-3 text-sm text-amber-100">
         <span>预计消耗 {pendingRun.estimated_cost} 额度，超出任务预算。</span>
-        <span className="flex gap-2"><button className="rounded-lg bg-amber-300 px-3 py-1 text-amber-950" onClick={() => resolveApproval('approve')}>确认执行</button><button className="rounded-lg border border-amber-600 px-3 py-1" onClick={() => resolveApproval('cancel')}>取消任务</button></span>
+        <span className="flex gap-2"><button className="rounded-lg bg-amber-300 px-3 py-1 text-amber-950" onClick={() => resolveApproval('approve')} disabled={isStreaming}>确认执行</button><button className="rounded-lg border border-amber-600 px-3 py-1" onClick={() => resolveApproval('cancel')} disabled={isStreaming}>取消任务</button></span>
       </div>}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {messages.length === 0 && (
