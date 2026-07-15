@@ -2,7 +2,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useEffect, useMemo, useState } from 'react'
 import { useWorkbench } from '../context/WorkbenchContext'
 
-function MiniMaxLogo() {
+function QingQingLogo() {
   return (
     <svg viewBox="0 0 64 64" aria-hidden="true" className="h-10 w-10">
       <defs>
@@ -80,10 +80,10 @@ export default function MainLayout() {
       )}
       <aside className={`workspace-sidebar ${sidebarOpen ? 'workspace-sidebar-open' : ''}`}>
         <div className="sidebar-brand">
-          <MiniMaxLogo />
+          <QingQingLogo />
           <div>
-            <div className="brand-title">MiniMax</div>
-            <div className="brand-subtitle">多模态工作台</div>
+            <div className="brand-title">轻青</div>
+            <div className="brand-subtitle">个人创作 Agent</div>
           </div>
         </div>
 
@@ -123,10 +123,10 @@ export default function MainLayout() {
             </button>
             <div>
               <h1 className="hero-title">你好，创意探索者！👋</h1>
-              <p className="hero-subtitle">欢迎使用 MiniMax 多模态工作台，释放你的创造力</p>
+              <p className="hero-subtitle">欢迎使用轻青，让多种模型协作完成你的创作</p>
               <div className="hero-note-wrap">
                 <span className="hero-note-pill">当前页面：{currentPageTitle}</span>
-                <span className="hero-note-pill">API Key 来源：{apiKeySource}</span>
+                <span className="hero-note-pill">模型凭据：{apiKeySource}</span>
               </div>
             </div>
           </div>

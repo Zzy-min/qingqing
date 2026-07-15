@@ -1,320 +1,142 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import PageShell from '../components/PageShell'
 import { useWorkbench } from '../context/WorkbenchContext'
+import { apiFetch } from '../services/qingqingApi'
 
-function Field({ label, hint, children }) {
-  return (
-    <label className="settings-field">
-      <span className="settings-field-label">{label}</span>
-      {hint ? <span className="settings-field-hint">{hint}</span> : null}
-      {children}
-    </label>
-  )
-}
+const EMPTY_CREDENTIAL = { provider: 'openai', api_key: '', base_url: '', name: '', model_id: '', capabilities: ['chat'] }
 
 export default function SettingsPage() {
-  const {
-    settings,
-    replaceSettings,
-    validateApiKey,
-    settingsValidation,
-    apiKeySource
-  } = useWorkbench()
+  const { settings, replaceSettings, pushToast = () => {} } = useWorkbench()
+  const [advanced, setAdvanced] = useState(settings.advancedModeEnabled === true)
+  const [showWarning, setShowWarning] = useState(false)
+  const [credentials, setCredentials] = useState([])
+  const [form, setForm] = useState(EMPTY_CREDENTIAL)
+  const [customModels, setCustomModels] = useState([])
 
-  const [draft, setDraft] = useState(() => settings)
-  const [saving, setSaving] = useState(false)
+  useEffect(() => {
+    let activeRequest = true
+    apiFetch('/api/v1/me/preferences')
+      .then((response) => response.ok ? response.json() : Promise.reject(new Error('偏好加载失败')))
+      .then((preferences) => {
+        if (!activeRequest) return
+        const advancedModeEnabled = preferences.advanced_mode_enabled === true
+        const credentialPreference = preferences.credential_preference || 'platform_first'
+        setAdvanced(advancedModeEnabled)
+        replaceSettings({ ...settings, advancedModeEnabled, credentialPreference })
+      })
+      .catch(() => {})
+    return () => { activeRequest = false }
+  }, [])
 
-  const isChanged = useMemo(() => JSON.stringify(draft) !== JSON.stringify(settings), [draft, settings])
+  useEffect(() => {
+    if (!advanced) return
+    Promise.all([apiFetch('/api/v1/credentials').then((r) => r.ok ? r.json() : []), apiFetch('/api/v1/custom-models').then((r) => r.ok ? r.json() : [])]).then(([credentialsPayload, modelsPayload]) => {
+      setCredentials(Array.isArray(credentialsPayload) ? credentialsPayload : (credentialsPayload.data || []))
+      setCustomModels(Array.isArray(modelsPayload) ? modelsPayload : (modelsPayload.data || []))
+    }).catch(() => {})
+  }, [advanced])
 
-  const handleSave = () => {
-    setSaving(true)
-    replaceSettings(draft)
-    window.setTimeout(() => setSaving(false), 180)
+  const persistAdvanced = async (enabled) => {
+    const response = await apiFetch('/api/v1/me/preferences', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ advanced_mode_enabled: enabled }) })
+    if (!response.ok) return pushToast('error', '高阶模式设置保存失败')
+    setAdvanced(enabled)
+    replaceSettings({ ...settings, advancedModeEnabled: enabled })
   }
 
-  const updateDraft = (patch) => {
-    setDraft((prev) => ({
-      ...prev,
-      ...patch,
-      defaults: {
-        ...prev.defaults,
-        ...(patch.defaults || {})
-      },
-      defaultParams: {
-        ...prev.defaultParams,
-        ...(patch.defaultParams || {})
-      },
-      providerApiKeys: {
-        ...(prev.providerApiKeys || {}),
-        ...(patch.providerApiKeys || {})
-      },
-      providerBaseUrls: {
-        ...(prev.providerBaseUrls || {}),
-        ...(patch.providerBaseUrls || {})
-      },
-      providerSecrets: {
-        ...(prev.providerSecrets || {}),
-        ...(patch.providerSecrets || {})
-      }
-    }))
+  const onToggle = (event) => {
+    if (event.target.checked && !advanced) setShowWarning(true)
+    else void persistAdvanced(false)
   }
 
-  const handleValidateApiKey = async () => {
-    if (isChanged) {
-      replaceSettings(draft)
-    }
-    await validateApiKey()
+  const saveCredential = async (event) => {
+    event.preventDefault()
+    const compatible = form.provider === 'openai_compatible'
+    const endpoint = compatible ? '/api/v1/custom-models' : '/api/v1/credentials'
+    const body = compatible ? form : { provider: form.provider, api_key: form.api_key }
+    const response = await apiFetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    if (!response.ok) return pushToast('error', '凭据保存失败，请检查配置')
+    const item = await response.json()
+    if (compatible) setCustomModels((current) => [...current, item.data || item])
+    else setCredentials((current) => [...current, item.data || item])
+    setForm(EMPTY_CREDENTIAL)
+    pushToast('success', '凭据已加密保存')
+  }
+
+  const removeCredential = async (id) => {
+    const response = await apiFetch(`/api/v1/credentials/${encodeURIComponent(id)}`, { method: 'DELETE' })
+    if (response.ok) setCredentials((current) => current.filter((item) => item.id !== id))
+  }
+
+  const testCredential = async (id) => {
+    const response = await apiFetch(`/api/v1/credentials/${encodeURIComponent(id)}/test`, { method: 'POST' })
+    pushToast(response.ok ? 'success' : 'error', response.ok ? '凭据连接验证通过' : '凭据验证失败，请检查后重试')
+  }
+
+  const removeCustomModel = async (id) => {
+    const response = await apiFetch(`/api/v1/custom-models/${encodeURIComponent(id)}`, { method: 'DELETE' })
+    if (response.ok) setCustomModels((current) => current.filter((item) => item.id !== id))
   }
 
   return (
-    <PageShell
-      title="设置"
-      description="管理本地工作台配置，包括 API Key、默认模型和默认参数。"
-      extra={(
-        <button
-          type="button"
-          disabled={!isChanged || saving}
-          onClick={handleSave}
-          className="btn-gradient"
-        >
-          {saving ? '保存中...' : '保存设置'}
-        </button>
-      )}
-    >
-      <section className="settings-grid-main">
-        <div className="card-shell settings-card">
-          <h3 className="section-title">主题与 API Key</h3>
+    <PageShell title="设置" description="管理轻青的体验偏好。高阶功能与账户权益相互独立。">
+      <section className="card-shell settings-card mb-5">
+        <h3 className="section-title">通用设置</h3>
+        <label className="settings-field">
+          <span className="settings-field-label">主题模式</span>
+          <select className="field-input" value={settings.theme || 'light'} onChange={(event) => replaceSettings({ ...settings, theme: event.target.value })}>
+            <option value="light">亮色模式</option><option value="auto">跟随系统</option><option value="dark">深色模式</option>
+          </select>
+        </label>
+        <label className="settings-field">
+          <span className="settings-field-label">API 使用策略</span>
+          <select className="field-input" value={settings.credentialPreference || 'platform_first'} onChange={async (event) => { const value = event.target.value; const response = await apiFetch('/api/v1/me/preferences', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ credential_preference: value }) }); if (response.ok) replaceSettings({ ...settings, credentialPreference: value }); else pushToast('error', 'API 使用策略保存失败') }}>
+            <option value="platform_first">平台优先</option><option value="byok_first">我的 API 优先</option><option value="byok_only">仅使用我的 API</option>
+          </select>
+        </label>
+      </section>
 
-          <Field label="主题模式">
-            <select
-              value={draft.theme || 'light'}
-              onChange={(e) => updateDraft({ theme: e.target.value })}
-              className="field-input"
-            >
-              <option value="light">亮色模式（推荐）</option>
-              <option value="auto">跟随系统</option>
-              <option value="dark">深色模式（实验）</option>
-            </select>
-          </Field>
-
-          <Field
-            label="MiniMax API Key"
-            hint="保存在当前浏览器本地存储，发送请求时通过 X-MiniMax-API-Key 头覆盖。"
-          >
-            <input
-              type="password"
-              value={draft.apiKey}
-              onChange={(e) => updateDraft({ apiKey: e.target.value })}
-              placeholder="输入后点击保存"
-              className="field-input"
-            />
-          </Field>
-
-          <div className="settings-button-row">
-            <button type="button" className="btn-secondary" onClick={() => void handleValidateApiKey()}>
-              校验当前 Key
-            </button>
-            <button
-              type="button"
-              className="btn-secondary"
-              onClick={() => updateDraft({ apiKey: '' })}
-            >
-              清空覆盖 Key
-            </button>
-          </div>
-
-          <div className="settings-status-card">
-            <div>当前来源：{apiKeySource}</div>
-            <div className="settings-status-line">
-              最近校验：{settingsValidation.checkedAt ? settingsValidation.checkedAt.toLocaleString() : '未校验'}
-            </div>
-            <div className={`settings-status-message ${settingsValidation.ok ? 'settings-status-message-ok' : ''}`}>
-              {settingsValidation.message || '点击"校验当前 Key"执行验证'}
-            </div>
-          </div>
-        </div>
-
-        <div className="card-shell settings-card">
-          <h3 className="section-title">多供应商 API Key</h3>
-          <p className="text-xs text-gray-500 mb-3">配置各供应商的 API Key，保存在浏览器本地。未配置的供应商在模型列表中显示为不可用。</p>
-
-          {[
-            { id: 'openai', name: 'OpenAI', placeholder: 'sk-...', hasBaseUrl: true, baseUrlPlaceholder: 'https://api.openai.com/v1' },
-            { id: 'google', name: 'Google Gemini', placeholder: 'AIza...' },
-            { id: 'qwen', name: '通义千问', placeholder: 'sk-...', hasBaseUrl: true, baseUrlPlaceholder: 'https://dashscope.aliyuncs.com/api/v1' },
-            { id: 'ernie', name: '文心一言', placeholder: 'API Key', hasSecret: true, secretPlaceholder: 'Secret Key' },
-            { id: 'zhipu', name: '智谱', placeholder: 'id.secret 格式' },
-            { id: 'minimax', name: 'MiniMax', placeholder: '输入 MiniMax API Key' },
-          ].map((provider) => (
-            <div key={provider.id} className="mb-3 p-3 rounded-lg bg-gray-50 border border-gray-200">
-              <div className="flex items-center gap-2 mb-2">
-                <span className="text-sm font-medium">{provider.name}</span>
-                {draft.providerApiKeys?.[provider.id] && (
-                  <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700">已配置</span>
-                )}
-              </div>
-              <input
-                type="password"
-                value={draft.providerApiKeys?.[provider.id] || ''}
-                onChange={(e) => updateDraft({
-                  providerApiKeys: { ...(draft.providerApiKeys || {}), [provider.id]: e.target.value }
-                })}
-                placeholder={provider.placeholder}
-                className="field-input mb-1"
-              />
-              {provider.hasBaseUrl && (
-                <input
-                  type="text"
-                  value={draft.providerBaseUrls?.[provider.id] || ''}
-                  onChange={(e) => updateDraft({
-                    providerBaseUrls: { ...(draft.providerBaseUrls || {}), [provider.id]: e.target.value }
-                  })}
-                  placeholder={provider.baseUrlPlaceholder}
-                  className="field-input mb-1 text-xs"
-                />
-              )}
-              {provider.hasSecret && (
-                <input
-                  type="password"
-                  value={draft.providerSecrets?.ernie || ''}
-                  onChange={(e) => updateDraft({
-                    providerSecrets: { ...(draft.providerSecrets || {}), ernie: e.target.value }
-                  })}
-                  placeholder={provider.secretPlaceholder}
-                  className="field-input"
-                />
-              )}
-            </div>
-          ))}
-        </div>
-
-        <div className="card-shell settings-card">
-          <h3 className="section-title">默认模型</h3>
-          <Field label="照片模型">
-            <select
-              value={draft.defaults.photoModel}
-              onChange={(e) => updateDraft({ defaults: { photoModel: e.target.value } })}
-              className="field-input"
-            >
-              <option value="image-01">image-01</option>
-              <option value="image-01-live">image-01-live</option>
-            </select>
-          </Field>
-
-          <Field label="语音模型">
-            <select
-              value={draft.defaults.ttsModel}
-              onChange={(e) => updateDraft({ defaults: { ttsModel: e.target.value } })}
-              className="field-input"
-            >
-              <option value="speech-2.8-hd">speech-2.8-hd</option>
-              <option value="speech-2.6-hd">speech-2.6-hd</option>
-              <option value="speech-02-hd">speech-02-hd</option>
-            </select>
-          </Field>
-
-          <Field label="音乐模型">
-            <select
-              value={draft.defaults.musicModel}
-              onChange={(e) => updateDraft({ defaults: { musicModel: e.target.value } })}
-              className="field-input"
-            >
-              <option value="music-2.6">music-2.6</option>
-              <option value="music-2.5">music-2.5</option>
-            </select>
-          </Field>
-
-          <Field label="视频模型">
-            <select
-              value={draft.defaults.videoModel}
-              onChange={(e) => updateDraft({ defaults: { videoModel: e.target.value } })}
-              className="field-input"
-            >
-              <option value="MiniMax-Hailuo-2.3">MiniMax-Hailuo-2.3</option>
-              <option value="MiniMax-Hailuo-2.3-Fast">MiniMax-Hailuo-2.3-Fast</option>
-              <option value="MiniMax-Hailuo-02">MiniMax-Hailuo-02</option>
-              <option value="S2V-01">S2V-01</option>
-            </select>
-          </Field>
+      <section className="card-shell settings-card mb-5">
+        <h3 className="section-title">默认创作设置</h3>
+        <div className="grid gap-3 md:grid-cols-3">
+          <label className="settings-field"><span className="settings-field-label">默认 BPM</span><input className="field-input" type="number" min="40" max="240" value={settings.defaultParams?.musicBpm ?? 120} onChange={(e) => replaceSettings({ ...settings, defaultParams: { ...settings.defaultParams, musicBpm: Number(e.target.value) } })} /></label>
+          <label className="settings-field"><span className="settings-field-label">视频时长（秒）</span><input className="field-input" type="number" min="3" max="10" value={settings.defaultParams?.videoDuration ?? 6} onChange={(e) => replaceSettings({ ...settings, defaultParams: { ...settings.defaultParams, videoDuration: Number(e.target.value) } })} /></label>
+          <label className="settings-field"><span className="settings-field-label">视频分辨率</span><select className="field-input" value={settings.defaultParams?.videoResolution ?? '768P'} onChange={(e) => replaceSettings({ ...settings, defaultParams: { ...settings.defaultParams, videoResolution: e.target.value } })}><option>512P</option><option>720P</option><option>768P</option><option>1080P</option></select></label>
         </div>
       </section>
 
-      <section className="card-shell settings-block-card">
-        <h3 className="section-title">默认生成参数</h3>
-        <div className="settings-default-grid">
-          <Field label="默认 BPM">
-            <input
-              type="number"
-              min={40}
-              max={240}
-              value={draft.defaultParams.musicBpm}
-              onChange={(e) => updateDraft({ defaultParams: { musicBpm: Number(e.target.value || 0) } })}
-              className="field-input"
-            />
-          </Field>
+      <section className="card-shell settings-card">
+        <h3 className="section-title">高阶选项</h3>
+        <label className="flex items-center gap-3 text-sm">
+          <input type="checkbox" aria-label="启用高阶模式" checked={advanced || showWarning} onChange={onToggle} />
+          <span>启用高阶模式</span>
+        </label>
+        <p className="mt-2 text-xs text-gray-500">适合了解模型 API 的用户；与账户权益无关。</p>
 
-          <Field label="默认视频时长（秒）">
-            <input
-              type="number"
-              min={3}
-              max={10}
-              value={draft.defaultParams.videoDuration}
-              onChange={(e) => updateDraft({ defaultParams: { videoDuration: Number(e.target.value || 0) } })}
-              className="field-input"
-            />
-          </Field>
-
-          <Field label="默认视频分辨率">
-            <select
-              value={draft.defaultParams.videoResolution}
-              onChange={(e) => updateDraft({ defaultParams: { videoResolution: e.target.value } })}
-              className="field-input"
-            >
-              <option value="512P">512P</option>
-              <option value="720P">720P</option>
-              <option value="768P">768P</option>
-              <option value="1080P">1080P</option>
-            </select>
-          </Field>
-        </div>
-      </section>
-
-      <section className="settings-grid-meta">
-        <div className="card-shell settings-card settings-card-compact">
-          <h3 className="section-title">账号信息</h3>
-          <div className="settings-info-grid">
-            <div className="settings-info-row">
-              <span className="settings-info-label">工作台身份</span>
-              <span className="settings-info-value">创意探索者</span>
-            </div>
-            <div className="settings-info-row">
-              <span className="settings-info-label">当前 API 来源</span>
-              <span className="settings-info-value">{apiKeySource}</span>
-            </div>
-            <div className="settings-info-row">
-              <span className="settings-info-label">运行模式</span>
-              <span className="settings-info-value">本地多模态工作台</span>
-            </div>
+        {showWarning && !advanced && (
+          <div role="dialog" aria-label="高阶模式说明" className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+            <p>API 费用由相应供应商账户承担。轻青只在执行你的任务时使用凭据；自定义端点可能带来数据与隐私风险。</p>
+            <div className="mt-3 flex gap-2"><button className="btn-gradient" onClick={async () => { setShowWarning(false); await persistAdvanced(true) }}>我已了解并启用</button><button className="btn-secondary" onClick={() => setShowWarning(false)}>取消</button></div>
           </div>
-        </div>
+        )}
 
-        <div className="card-shell settings-card settings-card-compact">
-          <h3 className="section-title">本地工作台配置</h3>
-          <div className="settings-info-grid">
-            <div className="settings-info-row">
-              <span className="settings-info-label">前端路由模式</span>
-              <span className="settings-info-value">Browser Router</span>
-            </div>
-            <div className="settings-info-row">
-              <span className="settings-info-label">统计存储</span>
-              <span className="settings-info-value">浏览器 localStorage</span>
-            </div>
-            <div className="settings-info-row">
-              <span className="settings-info-label">后端回退</span>
-              <span className="settings-info-value">MINIMAX_API_KEY (.env)</span>
-            </div>
+        {advanced && (
+          <div className="mt-6 border-t border-gray-200 pt-5">
+            <h3 className="section-title">模型与 API</h3>
+            <p className="mb-4 text-xs text-gray-500">密钥提交到服务端加密保存，保存后不会再次显示明文。</p>
+            <form onSubmit={saveCredential} className="grid gap-3 md:grid-cols-2">
+              <select aria-label="供应商" className="field-input" value={form.provider} onChange={(e) => setForm({ ...form, provider: e.target.value })}>
+                <option value="openai">OpenAI</option><option value="google">Google Gemini</option><option value="qwen">通义千问</option><option value="minimax">MiniMax</option><option value="openai_compatible">OpenAI 兼容服务</option>
+              </select>
+              <input aria-label="服务名称" className="field-input" placeholder="显示名称" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+              <input aria-label={form.provider === 'openai_compatible' ? '自定义 API Key' : 'API Key'} required type="password" className="field-input" placeholder="API Key" value={form.api_key} onChange={(e) => setForm({ ...form, api_key: e.target.value })} />
+              {form.provider === 'openai_compatible' && <input aria-label="Base URL" required type="url" className="field-input" placeholder="https://example.com/v1" value={form.base_url} onChange={(e) => setForm({ ...form, base_url: e.target.value })} />}
+              {form.provider === 'openai_compatible' && <input aria-label="模型 ID" required className="field-input" placeholder="模型 ID" value={form.model_id} onChange={(e) => setForm({ ...form, model_id: e.target.value })} />}
+              <button className="btn-gradient md:col-span-2" type="submit">{form.provider === 'openai_compatible' ? '添加自定义模型' : '加密保存凭据'}</button>
+            </form>
+            <div className="mt-5 space-y-2">{credentials.length === 0 ? <p className="text-sm text-gray-500">尚未配置我的 API</p> : credentials.map((item) => <div key={item.id} className="flex items-center justify-between rounded-lg border border-gray-200 p-3 text-sm"><span>{item.name || item.provider} · ••••{item.key_last4 || item.last_four || ''}</span><span className="flex gap-2"><button aria-label={`测试 ${item.provider} 凭据`} className="btn-secondary" onClick={() => testCredential(item.id)}>测试</button><button aria-label={`删除 ${item.provider} 凭据`} className="btn-secondary" onClick={() => removeCredential(item.id)}>删除</button></span></div>)}</div>
+            <div className="mt-5 space-y-2">{customModels.map((item) => <div key={item.id} className="flex items-center justify-between rounded-lg border border-gray-200 p-3 text-sm"><span>{item.display_name} · {item.remote_model_id}</span><button aria-label={`删除自定义模型 ${item.display_name}`} className="btn-secondary" onClick={() => removeCustomModel(item.id)}>删除</button></div>)}</div>
           </div>
-        </div>
+        )}
       </section>
     </PageShell>
   )

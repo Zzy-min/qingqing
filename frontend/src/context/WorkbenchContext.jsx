@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { tokenPlanApi } from '../services/api'
+import { apiFetch, getSessionToken } from '../services/qingqingApi'
 import {
   getApiKeySourceLabel,
   loadWorkbenchSettings,
@@ -202,6 +203,32 @@ export function WorkbenchProvider({ children }) {
     pushToast('error', `API Key 校验失败：${msg}`)
     return false
   }, [fetchTokenPlanRemains, pushToast])
+
+  useEffect(() => {
+    let active = true
+    const hydrateServerPreferences = async () => {
+      if (!getSessionToken()) return
+      try {
+        const response = await apiFetch('/api/v1/me/preferences')
+        if (!response.ok) return
+        const preferences = await response.json()
+        if (!active) return
+        setSettings((current) => saveWorkbenchSettings({
+          ...current,
+          advancedModeEnabled: preferences.advanced_mode_enabled === true,
+          credentialPreference: preferences.credential_preference || 'platform_first'
+        }))
+      } catch {
+        // Keep non-sensitive local display preferences when the account is offline.
+      }
+    }
+    void hydrateServerPreferences()
+    window.addEventListener('qingqing-session-changed', hydrateServerPreferences)
+    return () => {
+      active = false
+      window.removeEventListener('qingqing-session-changed', hydrateServerPreferences)
+    }
+  }, [])
 
   useEffect(() => {
     void fetchTokenPlanRemains({ silent: true })

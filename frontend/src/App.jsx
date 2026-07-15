@@ -13,6 +13,7 @@ import HelpPage from './pages/HelpPage'
 import ApiDocsPage from './pages/ApiDocsPage'
 import SettingsPage from './pages/SettingsPage'
 import Chat from './pages/Chat'
+import LoginPage from './pages/LoginPage'
 
 function NotFoundRedirect() {
   return <Navigate to="/dashboard" replace />
@@ -22,6 +23,7 @@ export default function App() {
   return (
     <WorkbenchProvider>
       <Routes>
+        <Route path="/login" element={<LoginPage />} />
         <Route path="/" element={<MainLayout />}>
           <Route index element={<Navigate to="/dashboard" replace />} />
           <Route path="dashboard" element={<DashboardPage />} />

@@ -2,7 +2,8 @@ const SETTINGS_STORAGE_KEY = 'mmx_workbench_settings_v1'
 
 const DEFAULT_SETTINGS = {
   theme: 'light',
-  apiKey: '',
+  advancedModeEnabled: false,
+  credentialPreference: 'platform_first',
   defaults: {
     photoModel: 'image-01',
     ttsModel: 'speech-2.8-hd',
@@ -45,7 +46,9 @@ function sanitizeSettings(raw) {
 
   return {
     theme: typeof input.theme === 'string' && input.theme.trim() ? input.theme.trim() : DEFAULT_SETTINGS.theme,
-    apiKey: typeof input.apiKey === 'string' ? input.apiKey.trim() : '',
+    advancedModeEnabled: input.advancedModeEnabled === true,
+    credentialPreference: ['platform_first', 'byok_first', 'byok_only'].includes(input.credentialPreference)
+      ? input.credentialPreference : DEFAULT_SETTINGS.credentialPreference,
     defaults: {
       photoModel: typeof defaults.photoModel === 'string' && defaults.photoModel.trim()
         ? defaults.photoModel.trim()
@@ -71,9 +74,9 @@ function sanitizeSettings(raw) {
         ? defaultParams.videoResolution.trim()
         : DEFAULT_SETTINGS.defaultParams.videoResolution
     },
-    providerApiKeys: sanitizeProviderMap(input.providerApiKeys, {}),
-    providerBaseUrls: sanitizeProviderMap(input.providerBaseUrls, {}),
-    providerSecrets: sanitizeProviderMap(input.providerSecrets, {})
+    providerApiKeys: {},
+    providerBaseUrls: {},
+    providerSecrets: {}
   }
 }
 
@@ -88,7 +91,15 @@ export function loadWorkbenchSettings() {
   try {
     const raw = window.localStorage.getItem(SETTINGS_STORAGE_KEY)
     if (!raw) return getDefaultWorkbenchSettings()
-    return sanitizeSettings(JSON.parse(raw))
+    const sanitized = sanitizeSettings(JSON.parse(raw))
+    // One-way migration: remove all legacy browser-stored credential material.
+    window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(sanitized))
+    window.localStorage.removeItem('apiKey')
+    window.localStorage.removeItem('minimaxApiKey')
+    window.localStorage.removeItem('providerApiKeys')
+    window.localStorage.removeItem('providerBaseUrls')
+    window.localStorage.removeItem('providerSecrets')
+    return sanitized
   } catch {
     return getDefaultWorkbenchSettings()
   }
@@ -99,10 +110,11 @@ export function saveWorkbenchSettings(nextSettings) {
   if (!canUseStorage()) return sanitized
   try {
     window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(sanitized))
-    // Also write provider keys as separate entries for direct header injection.
-    window.localStorage.setItem('providerApiKeys', JSON.stringify(sanitized.providerApiKeys || {}))
-    window.localStorage.setItem('providerBaseUrls', JSON.stringify(sanitized.providerBaseUrls || {}))
-    window.localStorage.setItem('providerSecrets', JSON.stringify(sanitized.providerSecrets || {}))
+    window.localStorage.removeItem('apiKey')
+    window.localStorage.removeItem('minimaxApiKey')
+    window.localStorage.removeItem('providerApiKeys')
+    window.localStorage.removeItem('providerBaseUrls')
+    window.localStorage.removeItem('providerSecrets')
   } catch {
     // Ignore write failure for private mode or storage quota.
   }
@@ -138,13 +150,8 @@ export function patchWorkbenchSettings(partial) {
   return saveWorkbenchSettings(merged)
 }
 
-export function getRuntimeApiKey() {
-  return loadWorkbenchSettings().apiKey || ''
-}
-
-export function getApiKeySourceLabel(settings) {
-  const key = (settings?.apiKey || '').trim()
-  return key ? '浏览器覆盖' : '后端 .env 回退'
+export function getApiKeySourceLabel() {
+  return '轻青服务端安全托管'
 }
 
 export { SETTINGS_STORAGE_KEY }

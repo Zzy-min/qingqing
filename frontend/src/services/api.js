@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { getRuntimeApiKey } from '../utils/workbenchSettings'
+import { getSessionToken } from './qingqingApi'
 import { trackRecentGeneration, trackUsageEvent } from '../utils/usageTracker'
 
 const api = axios.create({
@@ -8,10 +8,10 @@ const api = axios.create({
 })
 
 api.interceptors.request.use((config) => {
-  const key = getRuntimeApiKey()
-  if (key) {
+  const token = getSessionToken()
+  if (token) {
     config.headers = config.headers || {}
-    config.headers['X-MiniMax-API-Key'] = key
+    config.headers.Authorization = `Bearer ${token}`
   }
   return config
 })
