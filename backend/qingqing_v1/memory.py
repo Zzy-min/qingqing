@@ -13,6 +13,18 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _tokenize(text: str) -> set[str]:
+    """Tokenize for mixed Chinese/English retrieval (words + CJK bigrams)."""
+    raw = (text or "").lower().replace("，", " ").replace("。", " ").replace(",", " ")
+    tokens = {part for part in raw.split() if len(part) > 1}
+    cjk = [ch for ch in raw if "\u4e00" <= ch <= "\u9fff"]
+    for i in range(len(cjk) - 1):
+        tokens.add(cjk[i] + cjk[i + 1])
+    for ch in cjk:
+        tokens.add(ch)
+    return tokens
+
+
 def remember_run(user_id: str, run: dict[str, Any], invocations: list[dict[str, Any]] | None = None) -> dict[str, Any] | None:
     """Persist a lightweight summary after a completed run."""
     prefs = store.get_preferences(user_id)
@@ -61,16 +73,22 @@ def add_note(user_id: str, content: str, *, kind: str = "note", tags: list[str] 
 
 def list_memory(user_id: str, *, limit: int = 50, query: str | None = None) -> list[dict[str, Any]]:
     items = sorted(store.list_memory(user_id), key=lambda x: x.get("created_at", ""), reverse=True)
-    if query:
-        q = query.strip().lower()
-        items = [
-            item
-            for item in items
-            if q in (item.get("content") or "").lower()
-            or q in (item.get("goal") or "").lower()
-            or any(q in str(tag).lower() for tag in (item.get("tags") or []))
-        ]
-    return items[: max(1, min(limit, 200))]
+    if not query:
+        return items[: max(1, min(limit, 200))]
+    q = query.strip()
+    q_tokens = _tokenize(q)
+    scored: list[tuple[int, dict[str, Any]]] = []
+    for item in items:
+        hay = f"{item.get('goal', '')} {item.get('content', '')} {' '.join(item.get('tags') or [])}"
+        hay_l = hay.lower()
+        score = 0
+        if q.lower() in hay_l:
+            score += 10
+        score += sum(3 for token in q_tokens if token in hay_l)
+        if score > 0:
+            scored.append((score, item))
+    scored.sort(key=lambda pair: (pair[0], pair[1].get("created_at", "")), reverse=True)
+    return [item for _, item in scored[: max(1, min(limit, 200))]]
 
 
 def delete_memory(user_id: str, memory_id: str) -> bool:
@@ -96,23 +114,10 @@ def build_memory_context(user_id: str, goal: str, *, limit: int = 5) -> str:
             profile.append(f"避免：{avoid}")
         parts.append("用户偏好：" + "；".join(profile))
 
-    # Prefer keyword overlap, then recency
-    memories = list_memory(user_id, limit=40)
-    goal_tokens = {t for t in goal.lower().replace("，", " ").replace(",", " ").split() if len(t) > 1}
-    scored: list[tuple[int, dict[str, Any]]] = []
-    for item in memories:
-        text = f"{item.get('goal', '')} {item.get('content', '')}".lower()
-        score = sum(1 for token in goal_tokens if token in text)
-        scored.append((score, item))
-    scored.sort(key=lambda pair: (pair[0], pair[1].get("created_at", "")), reverse=True)
-    selected = [item for score, item in scored if score > 0][:limit]
-    if len(selected) < limit:
-        for _, item in scored:
-            if item in selected:
-                continue
-            selected.append(item)
-            if len(selected) >= limit:
-                break
+    memories = list_memory(user_id, limit=40, query=goal)
+    if not memories:
+        memories = list_memory(user_id, limit=limit)
+    selected = memories[:limit]
     if selected:
         lines = [f"- {item.get('content', '')[:220]}" for item in selected]
         parts.append("相关历史记忆：\n" + "\n".join(lines))

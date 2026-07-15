@@ -712,16 +712,29 @@ def list_artifacts(identity: Annotated[Identity, Depends(current_identity)], run
 
 @router.get("/artifacts/{artifact_id}/content")
 async def artifact_content(artifact_id: str, identity: Annotated[Identity, Depends(current_identity)]):
-    """Serve local artifacts or proxy remote HTTPS artifacts with SSRF checks."""
+    """Serve local/S3 artifacts or proxy remote HTTPS artifacts with SSRF checks."""
     artifact = store.get_artifact(identity.user_id, artifact_id)
     if not artifact:
         raise HTTPException(404, "Artifact content not found")
     storage_kind = artifact.get("storage")
+    media = {
+        "image": "image/png",
+        "audio": "audio/mpeg",
+        "video": "video/mp4",
+    }.get(artifact.get("kind") or "", "application/octet-stream")
     if storage_kind == "local":
         path = get_artifact_storage().resolve_local_path(artifact.get("file_path") or "")
         if path is None:
             raise HTTPException(404, "Artifact content not found")
         return FileResponse(path)
+    if storage_kind == "s3":
+        try:
+            content = get_artifact_storage().read_bytes(artifact)
+        except Exception:
+            raise HTTPException(502, "Failed to read S3 artifact")
+        if content is None:
+            raise HTTPException(404, "Artifact content not found")
+        return Response(content=content, media_type=media)
     if storage_kind == "remote":
         remote_url = artifact.get("remote_url")
         if not remote_url:
@@ -732,11 +745,6 @@ async def artifact_content(artifact_id: str, identity: Annotated[Identity, Depen
             raise
         except Exception:
             raise HTTPException(502, "Failed to fetch remote artifact")
-        media = {
-            "image": "image/png",
-            "audio": "audio/mpeg",
-            "video": "video/mp4",
-        }.get(artifact.get("kind") or "", "application/octet-stream")
         return Response(content=content, media_type=media)
     raise HTTPException(404, "Artifact content not found")
 

@@ -238,4 +238,17 @@ def _default_database_path() -> Path:
     return Path(configured) if configured else Path(__file__).resolve().parents[1] / "qingqing.db"
 
 
-store = SqliteStore(_default_database_path())
+def create_store():
+    """Factory: PostgreSQL when QINGQING_DATABASE_URL is postgres*, else SQLite."""
+    url = (os.environ.get("QINGQING_DATABASE_URL") or "").strip()
+    if url:
+        from .postgres_store import PostgresStore, is_postgres_url
+
+        if is_postgres_url(url):
+            return PostgresStore(url)
+    return SqliteStore(_default_database_path())
+
+
+# Module-level singleton used by the app. Tests may replace `store` attributes
+# or call store.reset(); factory is used at import time.
+store = create_store()

@@ -17,8 +17,11 @@ class _AgentPageState extends State<AgentPage> {
   final goal = TextEditingController();
   final budget = TextEditingController(text: '10');
   List<dynamic> models = [];
+  List<dynamic> skills = [];
   String model = 'auto';
+  String skillId = '';
   Map<String, dynamic>? run;
+  Map<String, dynamic>? plan;
   bool loading = false;
 
   @override
@@ -26,6 +29,7 @@ class _AgentPageState extends State<AgentPage> {
     super.initState();
     widget.controller.addListener(_onControllerChanged);
     _loadModels();
+    _loadSkills();
   }
 
   void _onControllerChanged() {
@@ -35,7 +39,12 @@ class _AgentPageState extends State<AgentPage> {
         .where((item) => item['id'] == runId)
         .firstOrNull;
     if (updated == null) return;
-    setState(() => run = Map<String, dynamic>.from(updated));
+    setState(() {
+      run = Map<String, dynamic>.from(updated);
+      if (updated['plan'] is Map) {
+        plan = Map<String, dynamic>.from(updated['plan'] as Map);
+      }
+    });
   }
 
   Future<void> _loadModels() async {
@@ -47,6 +56,46 @@ class _AgentPageState extends State<AgentPage> {
         setState(() => models = data['models'] as List<dynamic>? ?? []);
       }
     } catch (_) {}
+  }
+
+  Future<void> _loadSkills() async {
+    try {
+      final data = await widget.controller.api.request('/api/v1/skills');
+      if (mounted) {
+        setState(() => skills = data['skills'] as List<dynamic>? ?? []);
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _previewPlan() async {
+    if (goal.text.trim().isEmpty) return;
+    setState(() => loading = true);
+    try {
+      final data = await widget.controller.api.request(
+        '/api/v1/agent/plans/preview',
+        method: 'POST',
+        body: {
+          'goal': goal.text.trim(),
+          'skill_id': skillId.isEmpty ? null : skillId,
+          'auto_plan': skillId.isEmpty,
+          'routing': {
+            'capability': widget.capability,
+            'mode': model == 'auto' ? 'auto' : 'preferred',
+            'preferred_model_id': model == 'auto' ? null : model,
+            'credential_preference': widget.controller.credentialPreference,
+            'stage_overrides': <String, String>{},
+            'budget_limit': double.tryParse(budget.text),
+          },
+        },
+      );
+      if (!mounted) return;
+      setState(() {
+        plan = Map<String, dynamic>.from(data['plan'] as Map? ?? {});
+        loading = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => loading = false);
+    }
   }
 
   Future<void> _create() async {
@@ -63,10 +112,15 @@ class _AgentPageState extends State<AgentPage> {
     final data = await widget.controller.submitAgentRun(
       goal.text.trim(),
       routing,
+      skillId: skillId.isEmpty ? null : skillId,
+      autoPlan: skillId.isEmpty,
     );
     if (!mounted) return;
     setState(() {
       run = data == null ? null : Map<String, dynamic>.from(data);
+      if (data != null && data['plan'] is Map) {
+        plan = Map<String, dynamic>.from(data['plan'] as Map);
+      }
       loading = false;
     });
     if (data == null) {
@@ -102,13 +156,18 @@ class _AgentPageState extends State<AgentPage> {
         .where((item) => item['id'] == runId)
         .firstOrNull;
     if (updated != null) {
-      setState(() => run = Map<String, dynamic>.from(updated));
+      setState(() {
+        run = Map<String, dynamic>.from(updated);
+        if (updated['plan'] is Map) {
+          plan = Map<String, dynamic>.from(updated['plan'] as Map);
+        }
+      });
     }
   }
 
   String? _extractOutput(Map<String, dynamic> value) {
     final invocations = value['invocations'] as List<dynamic>? ?? const [];
-    for (final raw in invocations) {
+    for (final raw in invocations.reversed) {
       if (raw is! Map) continue;
       final output = raw['output'];
       if (output is Map && output['content'] != null) {
@@ -142,8 +201,28 @@ class _AgentPageState extends State<AgentPage> {
           widget.capability == 'image' ? '轻青图片创作' : '轻青创作 Agent',
           style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w700),
         ),
-        const Text('描述目标，Auto 会平衡质量、成本与速度。完成后会展示真实模型输出。'),
-        const SizedBox(height: 20),
+        const Text('支持 Skills 配方、计划预览与多步执行进度。'),
+        const SizedBox(height: 16),
+        DropdownButtonFormField<String>(
+          initialValue: skillId,
+          decoration: const InputDecoration(
+            labelText: '创作技能',
+            border: OutlineInputBorder(),
+          ),
+          items: [
+            const DropdownMenuItem(value: '', child: Text('Auto / 单能力')),
+            ...skills.map(
+              (item) => DropdownMenuItem(
+                value: item['id'].toString(),
+                child: Text(
+                  '${item['name']}（${item['step_count'] ?? (item['steps'] as List?)?.length ?? 0} 步）',
+                ),
+              ),
+            ),
+          ],
+          onChanged: (value) => setState(() => skillId = value ?? ''),
+        ),
+        const SizedBox(height: 12),
         Row(
           children: [
             Expanded(
@@ -184,7 +263,7 @@ class _AgentPageState extends State<AgentPage> {
             ),
           ],
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 12),
         Expanded(
           child: TextField(
             controller: goal,
@@ -200,16 +279,69 @@ class _AgentPageState extends State<AgentPage> {
             ),
           ),
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 12),
+        if (plan != null) _buildPlanCard(plan!),
         if (run case final value?) _buildRunCard(value),
-        FilledButton.icon(
-          onPressed: loading ? null : _create,
-          icon: const Icon(Icons.auto_awesome),
-          label: Text(loading ? '处理中…' : '开始创作'),
+        Row(
+          children: [
+            Expanded(
+              child: OutlinedButton(
+                onPressed: loading ? null : _previewPlan,
+                child: const Text('预览计划'),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              flex: 2,
+              child: FilledButton.icon(
+                onPressed: loading ? null : _create,
+                icon: const Icon(Icons.auto_awesome),
+                label: Text(loading ? '处理中…' : '开始创作'),
+              ),
+            ),
+          ],
         ),
       ],
     ),
   );
+
+  Widget _buildPlanCard(Map<String, dynamic> planValue) {
+    final steps = planValue['steps'] as List<dynamic>? ?? const [];
+    final invocations = run?['invocations'] as List<dynamic>? ?? const [];
+    final statusByStep = <String, String>{};
+    for (final inv in invocations) {
+      if (inv is Map && inv['step_id'] != null) {
+        statusByStep[inv['step_id'].toString()] = inv['status']?.toString() ?? '';
+      }
+    }
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '计划 ${planValue['skill_id'] ?? planValue['source'] ?? ''} · 预估 ${planValue['estimated_cost'] ?? '—'}',
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 8),
+            ...steps.asMap().entries.map((entry) {
+              final step = entry.value as Map;
+              final sid = step['id']?.toString() ?? '';
+              final st = statusByStep[sid] ?? 'pending';
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Text(
+                  '${entry.key + 1}. ${step['title'] ?? step['capability']} · $st',
+                ),
+              );
+            }),
+          ],
+        ),
+      ),
+    );
+  }
 
   Widget _buildRunCard(Map<String, dynamic> value) {
     final invocations = value['invocations'] as List<dynamic>? ?? const [];
@@ -255,7 +387,10 @@ class _AgentPageState extends State<AgentPage> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
-                  TextButton(onPressed: loading ? null : _cancel, child: const Text('取消任务')),
+                  TextButton(
+                    onPressed: loading ? null : _cancel,
+                    child: const Text('取消任务'),
+                  ),
                   const SizedBox(width: 8),
                   FilledButton(
                     onPressed: loading ? null : _approve,

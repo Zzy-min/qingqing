@@ -136,8 +136,10 @@ class AppController extends ChangeNotifier {
 
   Future<Map<String, dynamic>?> submitAgentRun(
     String goal,
-    Map<String, dynamic> routing,
-  ) async {
+    Map<String, dynamic> routing, {
+    String? skillId,
+    bool autoPlan = true,
+  }) async {
     return await _guard(() async {
       final data = await api.request(
         '/api/v1/agent/runs',
@@ -145,7 +147,12 @@ class AppController extends ChangeNotifier {
         headers: {
           'Idempotency-Key': DateTime.now().microsecondsSinceEpoch.toString(),
         },
-        body: {'goal': goal, 'routing': routing},
+        body: {
+          'goal': goal,
+          'routing': routing,
+          'skill_id': ?skillId,
+          'auto_plan': autoPlan,
+        },
       );
       var current = data;
       if (data['status'] == 'planned') {

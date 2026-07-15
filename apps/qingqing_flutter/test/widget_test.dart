@@ -25,6 +25,37 @@ class _AgentApi extends ApiClient {
     if (path.startsWith('/api/v1/models')) {
       return {'models': <dynamic>[]};
     }
+    if (path == '/api/v1/skills') {
+      return {
+        'skills': [
+          {
+            'id': 'social-copy',
+            'name': '种草文案',
+            'step_count': 1,
+            'steps': [
+              {'id': 'copy', 'capability': 'chat', 'title': '撰写文案'},
+            ],
+          },
+        ],
+      };
+    }
+    if (path == '/api/v1/agent/plans/preview') {
+      return {
+        'plan': {
+          'skill_id': 'social-copy',
+          'source': 'skill',
+          'estimated_cost': 0.02,
+          'steps': [
+            {
+              'id': 'copy',
+              'capability': 'chat',
+              'title': '撰写文案',
+              'depends_on': <String>[],
+            },
+          ],
+        },
+      };
+    }
     if (path == '/api/v1/agent/runs' && method == 'POST') {
       return {
         'id': 'run-1',

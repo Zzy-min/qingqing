@@ -16,18 +16,17 @@
 
 ### 当前能力边界（Phase 0–4）
 
-| 已具备 | 尚未具备 / 可后续加深 |
-|--------|----------------------|
-| 创建 Run 后**轮询终态**并展示模型输出 | 完整 Redis/Celery 多进程 Worker |
-| **SSE** 进度与 chat delta | PostgreSQL 生产仓储适配器 |
-| **Planner + Skills** 多步配方与 step retry | 云 KMS / 对象存储 S3 真对接 |
-| **记忆** 摘要 + 风格偏好注入 chat | 向量 RAG / 企业知识库 |
-| **内置工具** + 调用审计 + MCP 白名单登记 | 完整 MCP 远程工具调用 |
-| **Worker 抽象**（background/inline/durable） | Flutter 全能力对齐 |
-| **远程 Artifact 代理下载** + 本地存储接口 | |
-| **请求 ID** 中间件 + 密钥 previous 轮换解密 | |
-| `GET /api/v1/health` 探活 | |
-| 生产默认仅 `/api/v1` | |
+| 已具备（含生产加深） | 可选后续 |
+|--------|----------|
+| 结果闭环 + SSE + Planner/Skills + 记忆/工具 | 企业级向量库 / 云 KMS 服务 |
+| **PostgreSQL** 适配器（`QINGQING_DATABASE_URL`） | 多区域多副本运维 |
+| **Redis Worker** 模式 + `scripts/redis_worker.py` | Celery 生态 |
+| **S3/MinIO** Artifact 后端 | CDN 分发策略 |
+| 密钥 previous 轮换 + key_version | 硬件 HSM |
+| 中文记忆检索（分词/二元组） | 嵌入向量检索 |
+| **MCP 白名单 HTTPS 调用**（allowlisted tools） | 全协议 MCP stdio |
+| Flutter Skills/计划预览/多步进度 | Flutter 设置记忆页完整化 |
+| Worker / 远程产物代理 / 请求 ID / health | |
 
 改造蓝图见 `docs/superpowers/specs/`。
 
@@ -80,10 +79,28 @@ QINGQING_CREDENTIAL_KEY_VERSION=1
 # 可选：轮换后的旧密钥（逗号分隔），用于解密历史凭据
 # QINGQING_CREDENTIAL_KEY_PREVIOUS=old-key-material
 
-# Worker：background（默认）| inline | durable
+# Worker：background（默认）| inline | durable | redis
 # QINGQING_WORKER_MODE=background
 # QINGQING_WORKER_QUEUE_PATH=./artifacts/worker_queue.jsonl
+# QINGQING_REDIS_URL=redis://127.0.0.1:6379/0
+# QINGQING_REDIS_QUEUE_KEY=qingqing:run_jobs
+# 开发时可在入队后本机再执行：QINGQING_REDIS_EXECUTE_INLINE=true
+
+# 数据库：默认 SQLite；PostgreSQL 示例
+# QINGQING_DATABASE_PATH=./qingqing.db
+# QINGQING_DATABASE_URL=postgresql://user:pass@localhost:5432/qingqing
+
+# 产物存储：local（默认）| s3 | minio
+# QINGQING_ARTIFACT_BACKEND=local
 # QINGQING_ARTIFACT_ROOT=./artifacts
+# QINGQING_S3_BUCKET=qingqing
+# QINGQING_S3_ENDPOINT=http://127.0.0.1:9000
+# QINGQING_S3_ACCESS_KEY=
+# QINGQING_S3_SECRET_KEY=
+# QINGQING_S3_PREFIX=qingqing/artifacts
+
+# MCP 白名单（JSON 数组）。仅 enabled + HTTPS + allowlisted tools 可调用
+# QINGQING_MCP_SERVERS=[{"name":"demo","url":"https://mcp.example.com","enabled":true,"allowed_tools":["echo"]}]
 
 # 本地开发：允许本机回环免登录（生产必须 false）
 QINGQING_ALLOW_LOCAL_USER=true
