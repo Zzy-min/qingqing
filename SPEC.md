@@ -1,4 +1,4 @@
-# MiniMax Photo Agent -> Multimodal Workbench Spec
+# 轻青（qingqing）多模态工作台 Spec
 
 ## 1. 目标
 1. 将“照片编辑”并入全站多模态工作台，取消“photo / multimodal”双页面分裂。

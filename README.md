@@ -1,6 +1,6 @@
-# MiniMax Multimodal Workbench
+# 轻青（qingqing）
 
-全站已重构为单一多模态工作台，统一覆盖：
+供应商中立的个人创作 Agent 与多模态工作台，统一覆盖：
 - 照片编辑（文生图 / 图生图 / 本地滤镜）
 - 语音合成（TTS）
 - 音乐生成（Music / Cover）
@@ -50,7 +50,21 @@ MINIMAX_REST_BASE_URL=https://api.minimaxi.com/v1
 MINIMAX_ANTHROPIC_BASE_URL=https://api.minimaxi.com/anthropic
 MINIMAX_TOKEN_PLAN_BASE_URL=https://www.minimaxi.com/v1
 MINIMAX_TOKEN_PLAN_FALLBACK_BASE_URL=https://api.minimaxi.com/v1
+
+# 轻青 v1 必填：凭据加密与会话签名密钥（生产环境使用密钥管理服务注入）
+QINGQING_CREDENTIAL_KEY=replace-with-a-long-random-secret
+QINGQING_SESSION_SECRET=replace-with-another-long-random-secret
+QINGQING_CREDENTIAL_KEY_VERSION=1
+
+# 本地单用户开发才可开启；生产必须为 false
+QINGQING_ALLOW_LOCAL_USER=true
+
+# 可选：SQLite 路径。后续部署可用实现相同仓储接口的 PostgreSQL 适配器替换。
+QINGQING_DATABASE_PATH=./qingqing.db
 ```
+
+`/api/v1` 默认要求 `Authorization: Bearer <signed-session-token>`。只有显式设置
+`QINGQING_ALLOW_LOCAL_USER=true` 时才允许无登录的本地单用户开发模式；客户端请求头不能指定用户身份或 VIP 权益。
 
 ## 通用本地部署（多用户复用）
 - 本项目按“每个本地实例一个 Key”运行：每位使用者在自己的机器/环境中配置 `backend/.env` 里的 `MINIMAX_API_KEY` 即可。
@@ -76,6 +90,40 @@ npm run dev
 默认访问：
 - Frontend: `http://localhost:5173`
 - Backend: `http://localhost:8001`
+
+## Flutter 三端客户端（轻青）
+
+共享工程位于 `apps/qingqing_flutter`，目标平台为 Web、Windows、Android。所有平台复用邮箱登录、
+模型选择、Agent Run、预算审批、高阶模式与 BYOK API 层。
+
+```powershell
+# 本机使用 Puro 管理 Flutter stable
+puro -e stable flutter analyze
+puro -e stable flutter test
+
+# Web
+puro -e stable flutter build web --release `
+  --dart-define=API_BASE_URL=https://your-api.example.com
+
+# Android
+puro -e stable flutter build apk --release `
+  --dart-define=API_BASE_URL=https://your-api.example.com
+
+# Windows（需要 Visual Studio Desktop development with C++ workload）
+puro -e stable flutter build windows --release `
+  --dart-define=API_BASE_URL=https://your-api.example.com
+```
+
+- Android/Windows 会话令牌保存在系统安全存储；Flutter Web 不做跨浏览器重启的持久令牌保存。
+- Android release 必须使用真实 HTTPS API 地址，不要使用示例域名。
+- 当前本机已经验证 Web release 和 Android release；Windows 工具链需要管理员安装 Visual Studio C++ workload。
+
+### 轻青 v1 安全运行模式
+
+- 生产环境只使用 `/api/v1/*` Agent 接口；旧 `/api/*` 会绕过 Agent 路由快照与额度账本，因此默认不挂载。
+- 仅为本机旧工作台联调时，可同时设置 `QINGQING_ALLOW_LOCAL_USER=true` 和 `QINGQING_ENABLE_LEGACY_API=true`。本机免登录只对回环请求生效，不能用于生产部署。
+- 账户偏好可通过 `GET/PATCH /api/v1/me/preferences` 跨 Web、Windows、Android 同步；任务列表使用 `GET /api/v1/agent/runs`。
+- 生产必须配置 `QINGQING_SESSION_SECRET`、`QINGQING_CREDENTIAL_KEY` 和 SMTP 参数，并使用 HTTPS API 地址。
 
 ## 修改后重启与一致性检查（TTS）
 若修改了后端代码，请先重启后端实例再验证，避免旧进程继续提供旧逻辑：
