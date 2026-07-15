@@ -61,6 +61,14 @@ services:
       exit 0;
       "
 
+  # Local SMTP catcher for login closed-loop (no real outbound email).
+  # SMTP: localhost:1025  UI: http://localhost:8025
+  mailhog:
+    image: mailhog/mailhog:v1.0.1
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+
 volumes:
   qingqing_pg:
   qingqing_minio:

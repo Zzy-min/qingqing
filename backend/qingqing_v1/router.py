@@ -4,10 +4,8 @@ import json
 import os
 import re
 import secrets
-import smtplib
 import time
 from datetime import datetime, timezone
-from email.message import EmailMessage
 from pathlib import Path
 from typing import Annotated, Literal
 from uuid import uuid4
@@ -24,6 +22,7 @@ from .planner import build_plan
 from .memory import add_note, delete_memory, list_memory
 from .security import decrypt_secret, encrypt_secret, validate_public_https_url
 from .skills import get_skill, list_skills
+from .smtp_mail import send_login_email, smtp_configured
 from .store import store
 from .tools import invoke_tool, list_mcp_servers, list_tool_calls, list_tools
 from .execution import verify_provider_credential
@@ -62,20 +61,6 @@ def normalize_email(value: str) -> str:
     if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
         raise HTTPException(422, "Invalid email address")
     return email
-
-
-def send_login_email(email: str, code: str):
-    host = os.environ.get("QINGQING_SMTP_HOST")
-    if not host:
-        if os.environ.get("QINGQING_ALLOW_LOCAL_USER", "false").lower() == "true": return
-        raise HTTPException(503, "Email service is not configured")
-    message = EmailMessage(); message["Subject"] = "轻青登录验证码"; message["From"] = os.environ.get("QINGQING_SMTP_FROM", "noreply@qingqing.local"); message["To"] = email
-    message.set_content(f"你的轻青登录验证码是 {code}，10 分钟内有效。请勿转发给他人。")
-    port = int(os.environ.get("QINGQING_SMTP_PORT", "587"))
-    with smtplib.SMTP(host, port, timeout=10) as client:
-        client.starttls(); username = os.environ.get("QINGQING_SMTP_USERNAME"); password = os.environ.get("QINGQING_SMTP_PASSWORD")
-        if username and password: client.login(username, password)
-        client.send_message(message)
 
 
 def is_loopback_request(request: Request) -> bool:
@@ -247,16 +232,38 @@ def model_score(model: dict) -> float:
 
 @router.post("/auth/email/request-code", status_code=202)
 def request_email_code(body: EmailCodeRequest, request: Request):
-    email = normalize_email(body.email); now = int(time.time())
-    local_delivery = os.environ.get("QINGQING_ALLOW_LOCAL_USER", "false").lower() == "true" and is_loopback_request(request)
-    if not os.environ.get("QINGQING_SMTP_HOST") and not local_delivery:
+    email = normalize_email(body.email)
+    now = int(time.time())
+    local_delivery = (
+        os.environ.get("QINGQING_ALLOW_LOCAL_USER", "false").lower() == "true"
+        and is_loopback_request(request)
+    )
+    if not smtp_configured() and not local_delivery:
         raise HTTPException(503, "Email service is not configured")
-    if store.count_recent_auth_codes(email, now - 600) >= 3: raise HTTPException(429, "Too many verification requests")
+    if store.count_recent_auth_codes(email, now - 600) >= 3:
+        raise HTTPException(429, "Too many verification requests")
     code = f"{secrets.randbelow(1_000_000):06d}"
-    store.save_auth_code({"id": str(uuid4()), "email": email, "code_hash": hash_login_code(email, code), "expires_at": now + 600, "created_at": now})
-    send_login_email(email, code)
-    response = {"accepted": True, "expires_in": 600}
-    if local_delivery: response["dev_code"] = code
+    store.save_auth_code(
+        {
+            "id": str(uuid4()),
+            "email": email,
+            "code_hash": hash_login_code(email, code),
+            "expires_at": now + 600,
+            "created_at": now,
+        }
+    )
+    delivery = send_login_email(email, code)
+    response = {
+        "accepted": True,
+        "expires_in": 600,
+        "delivery": {
+            "delivered": bool(delivery.get("delivered")),
+            "mode": delivery.get("mode"),
+        },
+    }
+    # Dev convenience: only on loopback + local mode. Never force in production SMTP.
+    if local_delivery:
+        response["dev_code"] = code
     return response
 
 
