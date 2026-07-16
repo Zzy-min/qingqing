@@ -19,6 +19,7 @@ from gateway.registry.models import MODEL_REGISTRY
 from .auth import create_session_token, hash_login_code, verify_session_token
 from .events import event_bus
 from .planner import build_plan
+from .readiness import readiness_report
 from .memory import add_note, delete_memory, list_memory
 from .security import decrypt_secret, encrypt_secret, validate_public_https_url
 from .skills import get_skill, list_skills
@@ -618,6 +619,15 @@ def v1_health():
     }
 
 
+@router.get("/ready")
+def v1_ready(response: Response):
+    """Readiness probe: dependencies and production safety configuration."""
+    report = readiness_report()
+    if not report["ready"]:
+        response.status_code = 503
+    return report
+
+
 @router.post("/agent/runs/{run_id}/execute", status_code=202)
 def execute_run(run_id: str, background: BackgroundTasks, identity: Annotated[Identity, Depends(current_identity)]):
     run = store.get_run(identity.user_id, run_id)
@@ -629,7 +639,20 @@ def execute_run(run_id: str, background: BackgroundTasks, identity: Annotated[Id
         {"status": "running", "started_at": datetime.now(timezone.utc).isoformat()},
     )
     if not running: raise HTTPException(409, "Run is not ready for execution")
-    job = schedule_run_execution(identity.user_id, run_id, background)
+    try:
+        job = schedule_run_execution(identity.user_id, run_id, background)
+    except RuntimeError:
+        store.claim_run_status(
+            identity.user_id,
+            run_id,
+            "running",
+            {
+                "status": "planned",
+                "pause_reason": "worker_queue_unavailable",
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        raise HTTPException(503, "Worker queue is unavailable; the run was not started")
     return {**running, "worker": job}
 
 

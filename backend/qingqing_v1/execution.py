@@ -12,7 +12,7 @@ from gateway.schemas.video import VideoRequest
 from .events import event_bus
 from .memory import build_memory_context, remember_run
 from .planner import resolve_step_prompt, topological_invocation_order
-from .security import decrypt_secret, validate_public_https_url
+from .security import decrypt_secret, request_public_https_async, validate_public_https_url
 from .storage import get_artifact_storage
 from .store import store
 
@@ -132,19 +132,17 @@ async def _execute_chat(user_id: str, run_id: str, goal: str, model: dict, invoc
             "Content-Type": "application/json",
             **model.get("custom_headers", {}),
         }
-        async with httpx.AsyncClient(timeout=60, follow_redirects=False) as client:
-            response = await client.post(
-                f"{base_url}/chat/completions",
-                headers=headers,
-                json={"model": model["remote_model_id"], "messages": [{"role": "user", "content": goal}], "stream": False},
-            )
-            if 300 <= response.status_code < 400:
-                raise RuntimeError("redirect refused")
-            response.raise_for_status()
-            content = response.json()["choices"][0]["message"]["content"]
-            if content:
-                await _emit(run_id, "delta", invocation_id=invocation_id, capability="chat", delta=content)
-            return content
+        response = await request_public_https_async(
+            "POST",
+            f"{base_url}/chat/completions",
+            headers=headers,
+            json_body={"model": model["remote_model_id"], "messages": [{"role": "user", "content": goal}], "stream": False},
+            timeout=60,
+        )
+        content = response.json()["choices"][0]["message"]["content"]
+        if content:
+            await _emit(run_id, "delta", invocation_id=invocation_id, capability="chat", delta=content)
+        return content
     adapter = get_adapter(model["provider"])
     request = ChatRequest(model=model["id"], messages=[ChatMessage(role="user", content=goal)], stream=True)
     parts = []
@@ -244,16 +242,14 @@ async def _execute_byok_image(user_id: str, run_id: str, goal: str, model: dict)
         "Content-Type": "application/json",
         **model.get("custom_headers", {}),
     }
-    async with httpx.AsyncClient(timeout=120, follow_redirects=False) as client:
-        response = await client.post(
-            f"{base_url}/images/generations",
-            headers=headers,
-            json={"model": model["remote_model_id"], "prompt": goal},
-        )
-        if 300 <= response.status_code < 400:
-            raise RuntimeError("redirect refused")
-        response.raise_for_status()
-        output = response.json()
+    response = await request_public_https_async(
+        "POST",
+        f"{base_url}/images/generations",
+        headers=headers,
+        json_body={"model": model["remote_model_id"], "prompt": goal},
+        timeout=120,
+    )
+    output = response.json()
     for image in output.get("data", []):
         _record_remote_artifact(user_id, run_id, "image", image.get("url"), model["id"])
     return output

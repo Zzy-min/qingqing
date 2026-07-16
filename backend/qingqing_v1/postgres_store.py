@@ -47,9 +47,17 @@ class PostgresStore:
                     CREATE TABLE IF NOT EXISTS artifacts(id TEXT PRIMARY KEY, user_id TEXT NOT NULL, run_id TEXT NOT NULL, payload TEXT NOT NULL);
                     CREATE TABLE IF NOT EXISTS memory_items(id TEXT PRIMARY KEY, user_id TEXT NOT NULL, payload TEXT NOT NULL);
                     CREATE TABLE IF NOT EXISTS tool_calls(id TEXT PRIMARY KEY, user_id TEXT NOT NULL, payload TEXT NOT NULL);
+                    CREATE TABLE IF NOT EXISTS schema_migrations(
+                      version INTEGER PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
+                    INSERT INTO schema_migrations(version) VALUES(1) ON CONFLICT (version) DO NOTHING;
                     """
                 )
             self.conn.commit()
+
+    def schema_version(self) -> int:
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT COALESCE(MAX(version), 0) AS version FROM schema_migrations")
+            return int(cur.fetchone()["version"])
 
     def reset(self) -> None:
         with self.lock:

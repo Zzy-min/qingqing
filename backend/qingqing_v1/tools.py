@@ -8,11 +8,9 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 from uuid import uuid4
 
-import httpx
-
 from .memory import list_memory
 from .planner import CAPABILITY_COST, estimate_cost
-from .security import validate_public_https_url
+from .security import request_public_https, validate_public_https_url
 from .skills import list_skills
 from .store import store
 
@@ -113,16 +111,17 @@ def _tool_mcp_invoke(user_id: str, args: dict[str, Any]) -> dict[str, Any]:
     # Common HTTP MCP-ish endpoint shape used by simple bridges.
     endpoint = f"{base}/tools/call"
     payload = {"name": tool_name, "arguments": tool_args, "user_id": user_id}
-    with httpx.Client(timeout=20, follow_redirects=False) as client:
-        response = client.post(endpoint, json=payload, headers={"Content-Type": "application/json"})
-        if 300 <= response.status_code < 400:
-            raise ValueError("redirect refused")
-        if response.status_code >= 400:
-            raise ValueError(f"mcp http error {response.status_code}")
-        try:
-            data = response.json()
-        except Exception:
-            data = {"raw": response.text[:500]}
+    response = request_public_https(
+        "POST",
+        endpoint,
+        json_body=payload,
+        headers={"Content-Type": "application/json"},
+        timeout=20,
+    )
+    try:
+        data = response.json()
+    except Exception:
+        data = {"raw": response.text[:500]}
     return {"server": server_name, "tool": tool_name, "response": data}
 
 

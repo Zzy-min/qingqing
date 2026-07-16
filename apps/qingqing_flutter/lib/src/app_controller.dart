@@ -380,6 +380,19 @@ class AppController extends ChangeNotifier {
     } on ApiException catch (exception) {
       error = exception.message;
       return null;
+    } catch (exception) {
+      // Browser CORS / network failures throw ClientException, not ApiException.
+      // Without this, "获取验证码" appears to do nothing.
+      final text = exception.toString();
+      if (text.contains('Failed to fetch') ||
+          text.contains('ClientException') ||
+          text.contains('XMLHttpRequest') ||
+          text.contains('NetworkError')) {
+        error = '无法连接后端 API（请确认 8001 已启动，且 CORS 允许当前页面来源）';
+      } else {
+        error = '请求失败：$text';
+      }
+      return null;
     } finally {
       busy = false;
       notifyListeners();

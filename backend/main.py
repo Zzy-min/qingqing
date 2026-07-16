@@ -2,6 +2,7 @@ import os
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -87,24 +88,64 @@ async def limit_request_body(request: Request, call_next):
                 )
         except ValueError:
             pass
+    if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+        body = bytearray()
+        async for chunk in request.stream():
+            body.extend(chunk)
+            if len(body) > max_body:
+                from fastapi.responses import JSONResponse
+                return JSONResponse(
+                    status_code=413,
+                    content={"detail": f"Request body too large (max {max_body // 1024 // 1024}MB)"},
+                )
+        # Starlette's _CachedRequest forwards _body to the downstream app.
+        # Keeping the bounded copy here also preserves normal JSON/form parsing.
+        request._body = bytes(body)
     return await call_next(request)
 
 
-# CORS: default localhost only, configurable via CORS_ORIGINS env var (comma-separated)
-_default_origins = [
-    "http://localhost:3000", "http://localhost:3001", "http://localhost:8001",
-    "http://127.0.0.1:3000", "http://127.0.0.1:3001", "http://127.0.0.1:8001",
+LOCAL_CORS_ORIGINS = [
+    "http://localhost:3000",
+    "http://localhost:3001",
+    "http://localhost:5173",
+    "http://localhost:8001",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:3001",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:8001",
 ]
-_cors_origins = os.getenv("CORS_ORIGINS")
-if _cors_origins:
-    _default_origins = [o.strip() for o in _cors_origins.split(",") if o.strip()]
+
+
+def resolve_cors_origins(environment: str | None, configured: str | None) -> list[str]:
+    """Use exact configured origins; localhost defaults exist only outside production."""
+    if configured:
+        values = []
+        for raw in configured.split(","):
+            origin = raw.strip().rstrip("/")
+            if not origin:
+                continue
+            parsed = urlparse(origin)
+            if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.path not in {"", "/"}:
+                raise RuntimeError(f"Invalid CORS origin: {origin}")
+            if origin not in values:
+                values.append(origin)
+        return values
+    if (environment or "development").strip().lower() == "production":
+        return []
+    return list(LOCAL_CORS_ORIGINS)
+
+
+_cors_origins = resolve_cors_origins(
+    os.getenv("QINGQING_ENVIRONMENT"),
+    os.getenv("CORS_ORIGINS"),
+)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_default_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_cors_origins,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Accept", "Authorization", "Content-Type", "Idempotency-Key"],
 )
 
 def legacy_api_enabled() -> bool:
@@ -151,28 +192,37 @@ os.makedirs(TTS_AUDIO_DIR, exist_ok=True)
 if LEGACY_API_ENABLED:
     app.mount("/api/tts/audio", StaticFiles(directory=TTS_AUDIO_DIR), name="tts_audio")
 
-def _resolve_static_path() -> str:
-    backend_dir = Path(__file__).resolve().parent
-    candidates = [
-        backend_dir / "static",
-        backend_dir.parent / "frontend" / "temp-build",
-        backend_dir.parent / "frontend" / "dist",
-    ]
+def _resolve_static_path(project_root: Path | None = None) -> str | None:
+    """Resolve one explicit web product; never fall back across product lines."""
+    root = project_root or Path(__file__).resolve().parent.parent
+    client = os.getenv("QINGQING_WEB_CLIENT", "flutter").strip().lower()
+    candidates_by_client = {
+        "flutter": [root / "apps" / "qingqing_flutter" / "build" / "web"],
+        "react": [
+            root / "frontend" / "dist",
+            root / "frontend" / "temp-build",
+            root / "backend" / "static",
+        ],
+        "none": [],
+    }
+    if client not in candidates_by_client:
+        raise RuntimeError(
+            "QINGQING_WEB_CLIENT must be one of: flutter, react, none"
+        )
+
     existing = []
-    for candidate in candidates:
-        if candidate.exists() and candidate.is_dir():
-            index_file = candidate / "index.html"
-            mtime = index_file.stat().st_mtime if index_file.exists() else candidate.stat().st_mtime
-            existing.append((mtime, candidate))
-    if existing:
-        newest = max(existing, key=lambda item: item[0])[1]
-        return str(newest)
-    return str(backend_dir / "static")
+    for candidate in candidates_by_client[client]:
+        index_file = candidate / "index.html"
+        if candidate.is_dir() and index_file.is_file():
+            existing.append((index_file.stat().st_mtime, candidate))
+    if not existing:
+        return None
+    return str(max(existing, key=lambda item: item[0])[1])
 
 
 static_path = _resolve_static_path()
-static_root = Path(static_path).resolve()
-if static_root.exists():
+static_root = Path(static_path).resolve() if static_path else None
+if static_root is not None:
     assets_path = static_root / "assets"
     if assets_path.exists() and assets_path.is_dir():
         app.mount("/assets", StaticFiles(directory=str(assets_path)), name="frontend_assets")

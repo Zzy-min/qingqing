@@ -1,12 +1,12 @@
 {
-    "name": "qingqing",
-    "short_name": "qingqing",
+    "name": "轻青 - 个人创作 Agent",
+    "short_name": "轻青",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
-    "orientation": "portrait-primary",
+    "background_color": "#F7F8FC",
+    "theme_color": "#6E5CF6",
+    "description": "模型通用的个人创作 Agent。",
+    "orientation": "any",
     "prefer_related_applications": false,
     "icons": [
         {

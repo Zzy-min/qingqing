@@ -30,6 +30,8 @@ build_log.txt
 
 # Temp PowerShell scripts
 *.ps1
+!dev-up.ps1
+!apps/qingqing_flutter/tool/*.ps1
 
 # Backend runtime
 backend/.tmp

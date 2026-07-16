@@ -58,6 +58,7 @@ def test_schedule_redis_falls_back_without_redis(monkeypatch):
     from qingqing_v1.worker import schedule_run_execution
 
     monkeypatch.setenv("QINGQING_WORKER_MODE", "redis")
+    monkeypatch.setenv("QINGQING_WORKER_FALLBACK_TO_BACKGROUND", "true")
 
     def boom(*a, **k):
         raise RuntimeError("no redis")
@@ -70,6 +71,20 @@ def test_schedule_redis_falls_back_without_redis(monkeypatch):
     meta = schedule_run_execution("u", "r", background=None)
     assert meta["mode"] in {"redis", "background"}
     assert "scheduled" in meta
+
+
+def test_schedule_redis_fails_closed_without_explicit_fallback(monkeypatch):
+    from qingqing_v1.worker import schedule_run_execution
+
+    monkeypatch.setenv("QINGQING_WORKER_MODE", "redis")
+    monkeypatch.delenv("QINGQING_WORKER_FALLBACK_TO_BACKGROUND", raising=False)
+    monkeypatch.setattr(
+        "qingqing_v1.worker._enqueue_redis_job",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("redis unavailable")),
+    )
+
+    with pytest.raises(RuntimeError, match="worker queue unavailable"):
+        schedule_run_execution("u", "r", background=None)
 
 
 def test_s3_storage_write_read(monkeypatch):
@@ -133,16 +148,13 @@ def test_mcp_invoke_requires_enabled_allowlist(monkeypatch):
         def json(self):
             return {"ok": True, "echo": "hi"}
 
-    class Client:
-        def __init__(self, *a, **k): pass
-        def __enter__(self): return self
-        def __exit__(self, *a): pass
-        def post(self, url, json=None, headers=None):
-            assert url.endswith("/tools/call")
-            assert json["name"] == "echo"
-            return Resp()
+    def safe_request(method, url, json_body=None, headers=None, **kwargs):
+        assert method == "POST"
+        assert url.endswith("/tools/call")
+        assert json_body["name"] == "echo"
+        return Resp()
 
-    monkeypatch.setattr(tools.httpx, "Client", Client)
+    monkeypatch.setattr(tools, "request_public_https", safe_request)
     out = tools.invoke_tool("local-user", "mcp_invoke", {"server": "demo", "tool": "echo", "arguments": {"x": 1}})
     assert out["status"] == "completed"
     assert out["result"]["response"]["ok"] is True

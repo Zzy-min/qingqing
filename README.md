@@ -12,7 +12,7 @@
 | 模型选择 | Auto / 偏好 / 锁定；服务端计算权益与可用性 |
 | 多模态 | 文本、图片、TTS、音乐、视频 |
 | 高阶 BYOK | 加密托管供应商密钥；OpenAI 兼容自定义端点（HTTPS + SSRF 校验） |
-| 多端 | React Web 工作台 + Flutter（Web / Windows / Android） |
+| 多端 | Flutter 用户端（Web / Windows / Android）+ React 旧版内部工作台 |
 
 ### 当前能力边界（Phase 0–4）
 
@@ -38,19 +38,27 @@ qingqing/
 │   ├── qingqing_v1/         # /api/v1 轻青 Agent、鉴权、权益、凭据
 │   ├── gateway/             # 多供应商适配（legacy 可选挂载）
 │   └── services/            # 供应商能力实现（含 MiniMax 等）
-├── frontend/                # React 18 + Vite 工作台
-├── apps/qingqing_flutter/   # Flutter 三端客户端
+├── frontend/                # React 旧版内部工作台（非用户端发布入口）
+├── apps/qingqing_flutter/   # Flutter 统一用户端：Web / Windows / Android
 └── docs/superpowers/        # 设计 / 计划 / 评审
 ```
 
 ## 技术栈
 
 - **Backend:** FastAPI、httpx、SQLite（可替换仓储）、cryptography
-- **Frontend:** React 18、Vite、TailwindCSS、Zustand
-- **Clients:** Flutter（Web / Windows / Android）
+- **User Client:** Flutter（Web / Windows / Android，共用产品信息架构）
+- **Legacy Workbench:** React 18、Vite、TailwindCSS、Zustand（仅内部迁移/诊断）
 - **模型接入:** 多供应商注册表；平台 Key 与用户 BYOK 可组合路由
 
 ## 可选依赖（Docker）
+
+Windows 本地开发可直接运行：
+
+```powershell
+.\dev-up.ps1
+```
+
+该脚本只会向被 Git 忽略的 `backend/.env` 追加缺失的本地配置，生成随机会话/凭据密钥，不会覆盖已有供应商密钥；随后启动 Compose、安装集成依赖并运行 PG / Redis / MinIO / MailHog 闭环测试。
 
 本地一键起 PostgreSQL / Redis / MinIO：
 
@@ -96,10 +104,13 @@ QINGQING_CREDENTIAL_KEY_VERSION=1
 
 # Worker：background（默认）| inline | durable | redis
 # QINGQING_WORKER_MODE=background
-# QINGQING_WORKER_QUEUE_PATH=./artifacts/worker_queue.jsonl
+# QINGQING_DURABLE_QUEUE_DIR=./artifacts/worker_jobs
 # QINGQING_REDIS_URL=redis://127.0.0.1:6379/0
 # QINGQING_REDIS_QUEUE_KEY=qingqing:run_jobs
-# 开发时可在入队后本机再执行：QINGQING_REDIS_EXECUTE_INLINE=true
+# QINGQING_JOB_MAX_ATTEMPTS=3
+# QINGQING_JOB_VISIBILITY_TIMEOUT=300
+# 仅开发降级使用；生产 Redis 故障默认失败关闭
+# QINGQING_WORKER_FALLBACK_TO_BACKGROUND=false
 
 # 数据库：默认 SQLite；PostgreSQL 示例
 # QINGQING_DATABASE_PATH=./qingqing.db
@@ -119,6 +130,9 @@ QINGQING_CREDENTIAL_KEY_VERSION=1
 
 # 本地开发：允许本机回环免登录（生产必须 false）
 QINGQING_ALLOW_LOCAL_USER=true
+
+# production 不会隐式允许 localhost，必须显式列出正式 Web Origin
+# QINGQING_ENVIRONMENT=production
 
 # 仅本机旧工作台联调时开启；会挂载会绕过账本的 /api/*
 # QINGQING_ENABLE_LEGACY_API=true
@@ -159,7 +173,29 @@ uvicorn main:app --host 0.0.0.0 --port 8001 --reload
 - API 文档：http://127.0.0.1:8001/docs  
 - 健康检查：http://127.0.0.1:8001/api/health（需开启 legacy 时才有 `/api/health`；否则以 `/docs` 与 `/api/v1/*` 为准）
 
-### 2. React 工作台
+### 2. Web 产品边界
+
+Flutter 是轻青唯一的用户端产品实现，Web、Windows 和 Android 共用
+`apps/qingqing_flutter`。`frontend/` 中的 React 应用仅保留为旧能力迁移和内部诊断
+工作台，不作为用户端继续设计，也不会被后端静默选为替代页面。
+
+后端静态入口由 `QINGQING_WEB_CLIENT` 显式控制：
+
+- `flutter`（默认）：只服务 `apps/qingqing_flutter/build/web`
+- `react`：仅在明确需要旧版内部工作台时启用
+- `none`：只启动 API，不挂载 Web 静态页面
+
+发布 Flutter Web：
+
+```powershell
+cd apps/qingqing_flutter
+puro -e stable flutter build web --release --dart-define=API_BASE_URL=https://your-api.example.com
+cd ..\..\backend
+$env:QINGQING_WEB_CLIENT="flutter"
+uvicorn main:app --host 0.0.0.0 --port 8001
+```
+
+#### React 旧版内部工作台
 
 ```bash
 cd frontend
@@ -171,7 +207,7 @@ npm run dev
 
 主要路由：`/dashboard`、`/chat`、`/photo`、`/voice`、`/music`、`/video`、`/token`、`/usage`、`/settings`、`/login` 等。
 
-### 3. Flutter 客户端
+### 3. Flutter 用户端
 
 工程：`apps/qingqing_flutter`
 
@@ -189,13 +225,15 @@ puro -e stable flutter run -d chrome --dart-define=API_BASE_URL=http://127.0.0.1
 # 发布构建请使用 HTTPS API
 puro -e stable flutter build web --release --dart-define=API_BASE_URL=https://your-api.example.com
 puro -e stable flutter build apk --release --dart-define=API_BASE_URL=https://your-api.example.com
-# Windows 需要 VS Desktop C++ workload
-puro -e stable flutter build windows --release --dart-define=API_BASE_URL=https://your-api.example.com
+# Windows 需要 VS Desktop C++ workload + ATL 组件
+.\tool\build-windows-release.ps1 -ApiBaseUrl https://your-api.example.com
 ```
 
 - Android / Windows：会话令牌走系统安全存储  
 - Flutter Web：不做跨浏览器重启的持久令牌  
 - Release 请勿使用示例域名
+- Windows 原生构建必须安装 `Microsoft.VisualStudio.Component.VC.ATL`；
+  `flutter_secure_storage_windows` 会使用 `atlstr.h`
 
 ## API 约定（轻青 v1）
 
@@ -218,6 +256,7 @@ puro -e stable flutter build windows --release --dart-define=API_BASE_URL=https:
 | POST | `/api/v1/agent/plans/preview` | 预览多步计划（不落库） |
 | POST | `/api/v1/agent/runs/{id}/steps/{step_id}/retry` | 单步重试 |
 | GET | `/api/v1/health` | 探活（无需鉴权） |
+| GET | `/api/v1/ready` | 数据库、Worker、存储与生产配置就绪检查 |
 | GET/POST/DELETE | `/api/v1/memory` | 跨会话记忆与笔记 |
 | GET | `/api/v1/tools` | 内置工具目录 + MCP 白名单元数据 |
 | POST | `/api/v1/tools/invoke` | 调用内置工具（审计） |

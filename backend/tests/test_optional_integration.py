@@ -65,7 +65,7 @@ def test_redis_enqueue_if_available(monkeypatch):
     pytest.importorskip("redis")
     monkeypatch.setenv("QINGQING_REDIS_URL", os.environ.get("QINGQING_REDIS_URL", "redis://127.0.0.1:6379/0"))
     monkeypatch.setenv("QINGQING_REDIS_QUEUE_KEY", "qingqing:test_jobs")
-    from qingqing_v1.worker import _enqueue_redis_job, consume_redis_job
+    from qingqing_v1.worker import _enqueue_redis_job, ack_redis_job, consume_redis_job
 
     job = _enqueue_redis_job("u-it", "run-it")
     assert job["run_id"] == "run-it"
@@ -73,6 +73,7 @@ def test_redis_enqueue_if_available(monkeypatch):
     got = consume_redis_job(timeout=1)
     assert got is not None
     assert got["run_id"] == "run-it"
+    ack_redis_job(got)
 
 
 @pytest.mark.skipif(not RUN, reason="set QINGQING_RUN_INTEGRATION=1 to run live checks")

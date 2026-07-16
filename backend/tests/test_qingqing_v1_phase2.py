@@ -297,6 +297,35 @@ def test_execute_reports_worker_metadata(client_fixture, monkeypatch):
     assert executed.json()["worker"]["run_id"] == run["id"]
 
 
+def test_execute_restores_planned_state_when_worker_queue_is_unavailable(client_fixture, monkeypatch):
+    monkeypatch.setenv("QINGQING_ALLOW_LOCAL_USER", "true")
+    monkeypatch.setattr(
+        "qingqing_v1.router.schedule_run_execution",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("queue unavailable")),
+    )
+    run = client_fixture.post(
+        "/api/v1/agent/runs",
+        headers={"Idempotency-Key": "worker-unavailable"},
+        json={
+            "goal": "hi",
+            "routing": {
+                "capability": "chat",
+                "mode": "auto",
+                "credential_preference": "platform_first",
+                "stage_overrides": {},
+                "budget_limit": 1,
+            },
+        },
+    ).json()
+
+    executed = client_fixture.post(f'/api/v1/agent/runs/{run["id"]}/execute')
+    current = client_fixture.get(f'/api/v1/agent/runs/{run["id"]}').json()
+
+    assert executed.status_code == 503
+    assert current["status"] == "planned"
+    assert current["pause_reason"] == "worker_queue_unavailable"
+
+
 def test_memory_and_tools_are_audited(client_fixture, monkeypatch):
     monkeypatch.setenv("QINGQING_ALLOW_LOCAL_USER", "true")
     note = client_fixture.post("/api/v1/memory", json={"content": "喜欢浅青配色与留白", "kind": "note", "tags": ["style"]})

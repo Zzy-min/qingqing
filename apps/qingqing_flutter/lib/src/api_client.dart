@@ -32,23 +32,32 @@ class ApiClient {
     }
     final uri = Uri.parse('$_base$path');
     final encoded = body == null ? null : jsonEncode(body);
-    final response = switch (method) {
-      'POST' => await _client.post(uri, headers: requestHeaders, body: encoded),
-      'PATCH' => await _client.patch(
-        uri,
-        headers: requestHeaders,
-        body: encoded,
-      ),
-      'DELETE' => await _client.delete(uri, headers: requestHeaders),
-      _ => await _client.get(uri, headers: requestHeaders),
-    };
+    late final http.Response response;
+    try {
+      response = switch (method) {
+        'POST' => await _client.post(uri, headers: requestHeaders, body: encoded),
+        'PATCH' => await _client.patch(
+          uri,
+          headers: requestHeaders,
+          body: encoded,
+        ),
+        'DELETE' => await _client.delete(uri, headers: requestHeaders),
+        _ => await _client.get(uri, headers: requestHeaders),
+      };
+    } catch (error) {
+      throw ApiException(
+        '网络请求失败（$_base$path）：$error',
+        0,
+      );
+    }
     final dynamic decoded = response.body.isEmpty
         ? <String, dynamic>{}
         : jsonDecode(response.body);
     if (response.statusCode < 200 || response.statusCode >= 300) {
-      final message = decoded is Map<String, dynamic>
-          ? decoded['detail']?.toString()
-          : null;
+      final detail = decoded is Map<String, dynamic> ? decoded['detail'] : null;
+      final message = detail is List
+          ? detail.map((e) => e is Map ? e['msg'] : e).join('; ')
+          : detail?.toString();
       throw ApiException(message ?? '请求失败，请稍后重试', response.statusCode);
     }
     return decoded is Map<String, dynamic>

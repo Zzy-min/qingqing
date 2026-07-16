@@ -39,7 +39,14 @@ class SqliteStore:
         CREATE TABLE IF NOT EXISTS artifacts(id TEXT PRIMARY KEY, user_id TEXT NOT NULL, run_id TEXT NOT NULL, payload TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS memory_items(id TEXT PRIMARY KEY, user_id TEXT NOT NULL, payload TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS tool_calls(id TEXT PRIMARY KEY, user_id TEXT NOT NULL, payload TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS schema_migrations(
+          version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+        INSERT OR IGNORE INTO schema_migrations(version) VALUES(1);
         """)
+
+    def schema_version(self) -> int:
+        row = self.db.execute("SELECT COALESCE(MAX(version), 0) AS version FROM schema_migrations").fetchone()
+        return int(row["version"])
 
     def reset(self):
         with self.lock:
