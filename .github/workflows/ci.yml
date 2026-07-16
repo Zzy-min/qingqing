@@ -108,17 +108,17 @@ jobs:
       - name: Install Visual C++ ATL if missing
         shell: pwsh
         run: |
-          $vsRoot = "${env:ProgramFiles(x86)}\Microsoft Visual Studio"
-          $atl = Get-ChildItem $vsRoot -Filter atlstr.h -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          $installerRoot = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer"
+          $vswhere = Join-Path $installerRoot "vswhere.exe"
+          $setup = Join-Path $installerRoot "setup.exe"
+          $installPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $installPath) { throw "Visual Studio C++ installation was not found" }
+          $atl = Get-ChildItem $installPath -Filter atlstr.h -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
           if (-not $atl) {
-            $vswhere = Join-Path $vsRoot "Installer\vswhere.exe"
-            $setup = Join-Path $vsRoot "Installer\setup.exe"
-            $installPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-            if (-not $installPath) { throw "Visual Studio C++ installation was not found" }
             $arguments = "modify --installPath `"$installPath`" --add Microsoft.VisualStudio.Component.VC.ATL --quiet --norestart"
             $process = Start-Process -FilePath $setup -ArgumentList $arguments -PassThru -Wait
             if ($process.ExitCode -ne 0) { throw "ATL installation failed with exit code $($process.ExitCode)" }
           }
-          $atl = Get-ChildItem $vsRoot -Filter atlstr.h -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          $atl = Get-ChildItem $installPath -Filter atlstr.h -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
           if (-not $atl) { throw "Visual C++ ATL (atlstr.h) is still missing" }
       - run: flutter build windows --release --dart-define=API_BASE_URL=https://api.example.invalid
