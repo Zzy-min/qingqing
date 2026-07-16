@@ -4,12 +4,13 @@ from pathlib import Path
 from uuid import uuid4
 
 
-def test_sqlite_store_records_current_schema_version():
+def test_sqlite_store_records_current_schema_version(tmp_path):
     from qingqing_v1.store import SqliteStore
 
-    path = Path(__file__).resolve().parents[1] / ".test-tmp" / f"schema-{uuid4().hex}.db"
+    path = tmp_path / "nested" / "schema.db"
     try:
         store = SqliteStore(path)
+        assert path.parent.is_dir()
         assert store.schema_version() == 1
         store.db.close()
     finally:

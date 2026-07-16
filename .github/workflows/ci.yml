@@ -83,7 +83,9 @@ jobs:
           cache: true
       - run: flutter pub get
       - run: flutter analyze
-      - run: flutter test
+      # The checked-in golden is rendered on Windows; Linux font rasterization
+      # differs slightly even with the same Flutter engine.
+      - run: flutter test --exclude-tags=golden
       - run: flutter build web --release --dart-define=API_BASE_URL=https://api.example.invalid
       - run: flutter build apk --debug --dart-define=API_BASE_URL=https://api.example.invalid
 
@@ -102,9 +104,21 @@ jobs:
           channel: stable
           cache: true
       - run: flutter pub get
-      - name: Verify Visual C++ ATL
+      - run: flutter test --tags=golden
+      - name: Install Visual C++ ATL if missing
         shell: pwsh
         run: |
-          $atl = Get-ChildItem "${env:ProgramFiles(x86)}\Microsoft Visual Studio" -Filter atlstr.h -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $atl) { throw "Visual C++ ATL (atlstr.h) is required" }
+          $vsRoot = "${env:ProgramFiles(x86)}\Microsoft Visual Studio"
+          $atl = Get-ChildItem $vsRoot -Filter atlstr.h -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $atl) {
+            $vswhere = Join-Path $vsRoot "Installer\vswhere.exe"
+            $setup = Join-Path $vsRoot "Installer\setup.exe"
+            $installPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+            if (-not $installPath) { throw "Visual Studio C++ installation was not found" }
+            $arguments = "modify --installPath `"$installPath`" --add Microsoft.VisualStudio.Component.VC.ATL --quiet --norestart"
+            $process = Start-Process -FilePath $setup -ArgumentList $arguments -PassThru -Wait
+            if ($process.ExitCode -ne 0) { throw "ATL installation failed with exit code $($process.ExitCode)" }
+          }
+          $atl = Get-ChildItem $vsRoot -Filter atlstr.h -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $atl) { throw "Visual C++ ATL (atlstr.h) is still missing" }
       - run: flutter build windows --release --dart-define=API_BASE_URL=https://api.example.invalid

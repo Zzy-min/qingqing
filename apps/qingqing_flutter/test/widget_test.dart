@@ -458,6 +458,12 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(home: SettingsPage(controller: controller)),
     );
+    await tester.runAsync(
+      () => precacheImage(
+        const AssetImage('assets/images/settings_security_hero.png'),
+        tester.element(find.byType(SettingsPage)),
+      ),
+    );
     await tester.pumpAndSettle();
 
     expect(tester.takeException(), isNull);
@@ -540,11 +546,17 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(home: SettingsPage(controller: controller)),
     );
+    await tester.runAsync(
+      () => precacheImage(
+        const AssetImage('assets/images/settings_security_hero.png'),
+        tester.element(find.byType(SettingsPage)),
+      ),
+    );
     await tester.pumpAndSettle();
 
     await expectLater(
       find.byType(SettingsPage),
       matchesGoldenFile('goldens/settings_page_desktop.png'),
     );
-  });
+  }, tags: 'golden');
 }

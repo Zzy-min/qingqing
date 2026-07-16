@@ -20,6 +20,8 @@ class SqliteStore:
 
     def __init__(self, path: str | Path):
         self.path = str(path)
+        if self.path != ":memory:" and not self.path.startswith("file:"):
+            Path(self.path).expanduser().parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(self.path, check_same_thread=False)
         self.lock = threading.RLock()
         self.db.row_factory = sqlite3.Row
